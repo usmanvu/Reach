@@ -8,12 +8,12 @@ type ThemeMode = "system" | "light" | "dark";
 type Filter = "all" | "to-reach" | "replied" | "followed" | "today" | "needs-follow-up";
 type TemplateItem = { id: string; title: string; text: string };
 type SocialAccount = { id: string; platform: string; value: string; custom?: boolean };
-type ProfileValue = { name: string; socials: SocialAccount[] };
+type ProfileValue = { name: string; socials: SocialAccount[]; avatarUrl?: string };
 const FIXED_PLATFORMS = ["Instagram", "Facebook", "Threads", "X", "LinkedIn", "Website / Portfolio"];
 function defaultSocials(): SocialAccount[] {
   return FIXED_PLATFORMS.map((platform, i) => ({ id: `social-${i}`, platform, value: "", custom: false }));
 }
-const DEFAULT_PROFILE: ProfileValue = { name: "", socials: defaultSocials() };
+const DEFAULT_PROFILE: ProfileValue = { name: "", socials: defaultSocials(), avatarUrl: "" };
 function normalizeSocials(raw: unknown): SocialAccount[] {
   const base = defaultSocials();
   if (!Array.isArray(raw)) return base;
@@ -422,6 +422,8 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<"profile" | "shortcuts" | "account">("profile");
   const [profile, setProfile] = useState<ProfileValue>(DEFAULT_PROFILE);
   const [profileDraft, setProfileDraft] = useState<ProfileValue>(DEFAULT_PROFILE);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const [shortcuts, setShortcuts] = useState<ShortcutMap>({ ...DEFAULT_SHORTCUTS });
   const [capturing, setCapturing] = useState<ShortcutAction | null>(null);
   // --- Auth (Option B: per-user) ---
@@ -482,6 +484,7 @@ export default function App() {
       if (cErr) throw cErr;
       const { error: sErr } = await supabase.from("outreach_settings").delete().eq("user_id", user.id);
       if (sErr) throw sErr;
+      try { const { data: files } = await supabase.storage.from("avatars").list(user.id); if (files && files.length > 0) { await supabase.storage.from("avatars").remove(files.map(f => `${user.id}/${f.name}`)); } } catch { /* avatar delete is best-effort */ }
       setContacts([]); setSelectedId(null); setPanelOpen(false); setScratchpad(""); setTemplates(DEFAULT_TEMPLATES); setProfile(DEFAULT_PROFILE);
       setShowDeleteAll(false); showToast("All your data was deleted");
     } catch (e) { showToast(e instanceof Error ? e.message : "Could not delete data"); }
@@ -515,7 +518,7 @@ export default function App() {
           if (Array.isArray(first.value.templates) && first.value.templates.length > 0) { setTemplates(first.value.templates); templatesRef.current = first.value.templates; }
           if (first.value.profile && typeof first.value.profile === "object") {
             const rawSocials = (first.value.profile as { socials?: unknown; socialLinks?: unknown }).socials ?? (first.value.profile as { socials?: unknown; socialLinks?: unknown }).socialLinks
-            const p: ProfileValue = { name: typeof first.value.profile.name === "string" ? first.value.profile.name : "", socials: normalizeSocials(rawSocials) };
+            const p: ProfileValue = { name: typeof first.value.profile.name === "string" ? first.value.profile.name : "", socials: normalizeSocials(rawSocials), avatarUrl: typeof (first.value.profile as { avatarUrl?: unknown }).avatarUrl === "string" ? (first.value.profile as { avatarUrl: string }).avatarUrl : "" };
             setProfile(p); profileRef.current = p; setProfileDraft(p);
           }
           if (first.value.shortcuts && typeof first.value.shortcuts === "object") {
@@ -730,12 +733,6 @@ export default function App() {
   };
 
   const closePanel = () => { selectContact(null); };
-  useEffect(() => {
-    if (!panelOpen) return;
-    const fn = (e: KeyboardEvent) => { if (e.key === "Escape") closePanel(); };
-    window.addEventListener("keydown", fn);
-    return () => window.removeEventListener("keydown", fn);
-  }, [panelOpen, selectedId]); // eslint-disable-line
 
   // ---- Settings: Profile + Shortcuts ----
   const openSettings = (tab: "profile" | "shortcuts" | "account") => {
@@ -745,10 +742,50 @@ export default function App() {
     setCapturing(null);
   };
   const saveProfile = async () => {
-    const next: ProfileValue = { name: profileDraft.name.trim(), socials: normalizeSocials(profileDraft.socials.map(s => ({ ...s, platform: s.platform.trim(), value: s.value.trim() }))) };
+    const next: ProfileValue = { name: profileDraft.name.trim(), socials: normalizeSocials(profileDraft.socials.map(s => ({ ...s, platform: s.platform.trim(), value: s.value.trim() }))), avatarUrl: (profileDraft.avatarUrl || "").trim() };
     setProfile(next); profileRef.current = next; setProfileDraft(next);
     try { await saveSettings(themeMode, selectedId); showToast("Profile saved"); } catch { showToast("Profile saved"); }
     setSettingsOpen(false);
+  };
+  // --- Avatar / PFP: Supabase Storage (bucket: avatars, public, per-user folder) ---
+  const handleAvatarFile = async (file: File) => {
+    if (!user) { showToast("Sign in to upload a photo"); return; }
+    if (!file.type.startsWith("image/")) { showToast("Please choose an image file"); return; }
+    if (file.size > 5 * 1024 * 1024) { showToast("Photo must be under 5MB"); return; }
+    setAvatarUploading(true);
+    try {
+      const rawExt = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const ext = ["jpg", "jpeg", "png", "webp", "gif"].includes(rawExt) ? rawExt : "jpg";
+      const path = `${user.id}/avatar.${ext}`;
+      // Clean old avatar with different extension so only one file lives in the folder
+      try {
+        const { data: existing } = await supabase.storage.from("avatars").list(user.id);
+        if (existing && existing.length > 0) {
+          const toRemove = existing.filter(f => f.name !== `avatar.${ext}`).map(f => `${user.id}/${f.name}`);
+          if (toRemove.length > 0) await supabase.storage.from("avatars").remove(toRemove);
+        }
+      } catch { /* cleanup is best-effort */ }
+      const { error: uploadError } = await supabase.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
+      if (uploadError) throw uploadError;
+      const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+      const url = `${data.publicUrl}?t=${Date.now()}`;
+      setProfileDraft(d => ({ ...d, avatarUrl: url }));
+      showToast("Photo ready — tap Save profile to keep it");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not upload photo";
+      if (msg.toLowerCase().includes("bucket not found") || msg.toLowerCase().includes("not found")) showToast("Avatar storage not set up yet — run the new SQL in Supabase");
+      else showToast(msg);
+    } finally { setAvatarUploading(false); }
+  };
+  const handleRemoveAvatar = async () => {
+    setProfileDraft(d => ({ ...d, avatarUrl: "" }));
+    if (user) {
+      try {
+        const { data } = await supabase.storage.from("avatars").list(user.id);
+        if (data && data.length > 0) await supabase.storage.from("avatars").remove(data.map(f => `${user.id}/${f.name}`));
+      } catch { /* best-effort */ }
+    }
+    showToast("Photo removed — tap Save profile");
   };
   const updateSocial = (id: string, field: "platform" | "value", nextValue: string) => {
     setProfileDraft(d => ({ ...d, socials: d.socials.map(s => s.id === id ? { ...s, [field]: nextValue } : s) }));
@@ -784,24 +821,33 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler, true);
   }, [capturing]);
 
-  // Global keyboard shortcuts
+  // Global keyboard shortcuts — fixed:
+  // - While typing, only Esc / Ctrl+Cmd+Enter / Mod shortcuts run, and Esc blurs so next shortcuts work again.
+  // - No duplicate Esc listener. Capturing owns keys while it is active.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (capturing) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName || "";
       const isTyping = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!target?.isContentEditable;
-      const isModEnter = (e.ctrlKey || e.metaKey) && e.key === "Enter";
+      const isMod = e.ctrlKey || e.metaKey;
+      const isModEnter = isMod && e.key === "Enter";
       const isEsc = e.key === "Escape";
-      // While typing, only Esc and Cmd/Ctrl+Enter run.
+      // While typing: Esc blurs + closes, Mod+Enter saves, Mod shortcuts (e.g. Mod+E export) still work.
       if (isTyping) {
         if (isEsc) {
+          if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
           if (deleteTarget) { setDeleteTarget(null); return; }
           if (settingsOpen) { setSettingsOpen(false); return; }
           if (modal) { if (!busy) setModal(null); return; }
           if (panelOpen) { closePanel(); return; }
+          return;
         }
         if (isModEnter && modal) { e.preventDefault(); submitForm(); return; }
+        if (isMod) {
+          if (matchesShortcut(e, shortcuts.export)) { e.preventDefault(); exportCSV(); return; }
+          if (matchesShortcut(e, shortcuts.saveForm) && modal) { e.preventDefault(); submitForm(); return; }
+        }
         return;
       }
       if (settingsOpen) {
@@ -818,7 +864,8 @@ export default function App() {
         return;
       }
       // Not typing, no overlay: shortcuts
-      if (matchesShortcut(e, shortcuts.close)) { if (panelOpen) { e.preventDefault(); closePanel(); } return; }
+      if (isEsc) { if (panelOpen) { e.preventDefault(); closePanel(); } return; }
+      if (shortcuts.close !== "Escape" && matchesShortcut(e, shortcuts.close)) { if (panelOpen) { e.preventDefault(); closePanel(); } return; }
       if (matchesShortcut(e, shortcuts.openSettings)) { e.preventDefault(); openSettings("shortcuts"); return; }
       if (matchesShortcut(e, shortcuts.focusSearch)) { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
       if (matchesShortcut(e, shortcuts.newContact)) {
@@ -1087,7 +1134,7 @@ export default function App() {
         {isMobile ? (
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="shrink-0">
-              <span className="flex h-[44px] w-[44px] items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>
+              {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>}
             </button>
             <div className="flex items-center gap-2">
               <span className="h-[10px] w-[10px] shrink-0 rounded-[2px]" style={{ background: "#DB200D" }} aria-hidden="true" />
@@ -1110,7 +1157,7 @@ export default function App() {
               <button onClick={exportCSV} className="flex min-h-[44px] items-center gap-2 rounded-[12px] border px-3.5 text-sm font-medium sm:px-4" style={{ borderColor: "var(--divider)" }}><Download size={16} /><span className="hidden sm:inline">Export spreadsheet</span><span className="sm:hidden">Export</span></button>
               <button onClick={() => openAdd()} className="flex min-h-[44px] items-center gap-2 rounded-[12px] px-4 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
               <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="flex min-h-[44px] items-center gap-2">
-                <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>
+                {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>}
                 {profile.name ? <span className="hidden max-w-[120px] truncate text-sm font-medium sm:inline">{profile.name}</span> : null}
               </button>
             </div>
@@ -1268,7 +1315,7 @@ export default function App() {
             <span className="text-[11px] font-medium">Notes</span>
           </button>
           <button onClick={() => openSettings("profile")} aria-label="Open settings" className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
-            <span className="flex h-[24px] w-[24px] items-center justify-center rounded-full text-[11px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }}>{headerInitials}</span>
+            {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[24px] w-[24px] rounded-full object-cover" /> : <span className="flex h-[24px] w-[24px] items-center justify-center rounded-full text-[11px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }}>{headerInitials}</span>}
             <span className="text-[11px] font-medium">You</span>
           </button>
         </nav>
@@ -1314,10 +1361,18 @@ export default function App() {
             {settingsTab === "profile" ? (
               <div className="pt-5">
                 {/* Top row — avatar left, Save pill right */}
+                <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" aria-label="Choose profile photo" onChange={e => { const f = e.target.files?.[0]; if (f) handleAvatarFile(f); e.target.value = ""; }} />
                 <div className="flex items-center justify-between gap-3">
-                  <span className="flex h-[56px] w-[56px] shrink-0 items-center justify-center rounded-full text-[20px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{draftInitials}</span>
-                  <button onClick={saveProfile} className="flex min-h-[40px] items-center gap-1.5 rounded-full px-5 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Check size={15} /> Save</button>
+                  <div className="flex items-center gap-3">
+                    {profileDraft.avatarUrl ? <img src={profileDraft.avatarUrl} alt="Your profile photo" className="h-[56px] w-[56px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[56px] w-[56px] shrink-0 items-center justify-center rounded-full text-[20px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{draftInitials}</span>}
+                    <div className="flex flex-col gap-1">
+                      <button onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading} className="min-h-[36px] rounded-full border px-4 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)" }}>{avatarUploading ? "Uploading…" : profileDraft.avatarUrl ? "Change photo" : "Upload photo"}</button>
+                      {profileDraft.avatarUrl && <button onClick={handleRemoveAvatar} disabled={avatarUploading} className="min-h-[32px] text-xs font-medium underline underline-offset-4 disabled:opacity-50" style={{ color: "var(--muted)" }}>Remove photo</button>}
+                    </div>
+                  </div>
+                  <button onClick={saveProfile} className="flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-full px-5 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Check size={15} /> Save</button>
                 </div>
+                <p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>JPG, PNG or WebP, under 5MB. Saved to your private Supabase account, not on the main screen.</p>
 
                 {/* Big title — name in red + email below */}
                 <div className="mt-5">
@@ -1350,9 +1405,9 @@ export default function App() {
 
                 {/* Four quick actions — Reach actions */}
                 <div className="mt-5 grid grid-cols-4 gap-2">
-                  <button type="button" disabled aria-disabled="true" title="Photo upload is not available yet" className="flex flex-col items-center gap-2 py-1 opacity-60">
-                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}><Camera size={20} /></span>
-                    <span className="text-[12px] font-medium">Photo</span>
+                  <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading} className="flex flex-col items-center gap-2 py-1 disabled:opacity-60">
+                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}>{profileDraft.avatarUrl ? <img src={profileDraft.avatarUrl} alt="" className="h-[56px] w-[56px] rounded-full object-cover" /> : <Camera size={20} />}</span>
+                    <span className="text-[12px] font-medium">{avatarUploading ? "Uploading…" : "Photo"}</span>
                   </button>
                   <button type="button" onClick={() => document.getElementById("profile-name")?.focus()} className="flex flex-col items-center gap-2 py-1">
                     <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }}><Pencil size={19} /></span>
@@ -1370,8 +1425,8 @@ export default function App() {
 
                 {/* Soft banner — Reach tip */}
                 <div className="mt-6 flex items-center justify-between gap-3 rounded-[20px] p-4" style={{ background: "var(--tint)" }}>
-                  <p className="text-sm leading-relaxed">Photo upload is not live yet — your initials show until then. Add a name and a social so your profile feels finished.</p>
-                  <button onClick={() => document.getElementById("profile-socials")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="shrink-0 rounded-full px-4 py-2.5 text-sm font-medium text-white" style={{ background: "#DB200D" }}>Add</button>
+                  <p className="text-sm leading-relaxed">{profileDraft.avatarUrl ? "Photo ready. Tap Save profile to keep it, or Change photo to pick another." : "Add a photo, name and a social so your profile feels finished. Your photo is only for you."}</p>
+                  <button onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading} className="shrink-0 rounded-full px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60" style={{ background: "#DB200D" }}>{avatarUploading ? "Uploading…" : "Add photo"}</button>
                 </div>
 
                 {/* Name field */}
@@ -1422,7 +1477,7 @@ export default function App() {
               </div>
             ) : settingsTab === "shortcuts" ? (
               <div className="pt-2">
-                <p className="mt-4 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Shortcuts pause while typing, except Esc and Ctrl/Cmd + Enter. Press <span className="font-medium" style={{ color: "var(--text)" }}>?</span> to open this tab.</p>
+                <p className="mt-4 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Shortcuts pause while typing, except Esc, Ctrl/Cmd + Enter, and Ctrl/Cmd shortcuts like Ctrl/Cmd + E. Press Esc while typing to blur the field, then shortcuts work again. Press <span className="font-medium" style={{ color: "var(--text)" }}>?</span> to open this tab.</p>
                 {SHORTCUT_GROUPS.map(g => (
                   <div key={g.group} className="mt-7">
                     <p className="small-caps" style={{ color: "var(--muted)" }}>{g.group}</p>
@@ -1434,7 +1489,7 @@ export default function App() {
                             <span className="min-w-0 text-sm">{item.label}</span>
                             <span className="flex shrink-0 items-center gap-2">
                               <span className="inline-flex min-h-[28px] items-center rounded-full border px-2.5 text-xs font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{isCapturing ? "Press a key…" : displayShortcut(shortcuts[item.action])}{item.action === "next" ? " / ↓" : item.action === "prev" ? " / ↑" : ""}</span>
-                              <button onClick={() => setCapturing(item.action)} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>{isCapturing ? "Cancel" : "Change"}</button>
+                              <button onClick={() => setCapturing(isCapturing ? null : item.action)} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>{isCapturing ? "Cancel" : "Change"}</button>
                             </span>
                           </div>
                         );
