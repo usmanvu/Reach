@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
-import { Search, Plus, Download, Pencil, Trash2, X, Minus, ExternalLink, Copy, Check, ChevronDown, ChevronUp, GripVertical, AlertTriangle, Sun, Moon, Monitor } from "lucide-react";
+import { Search, Plus, Download, Pencil, Trash2, X, Minus, ExternalLink, Copy, Check, ChevronDown, ChevronUp, GripVertical, AlertTriangle, Sun, Moon, Monitor, Home, Target, FileText, Camera, Link2, Users, AtSign } from "lucide-react";
 
 type ContactValue = { name: string; channel: string; outreachDate: string; contactDetails: string; link: string; replied: boolean; followedUp: boolean; notes: string; createdAt: string; updatedAt: string; };
 type Contact = { id: string; value: ContactValue };
@@ -239,7 +239,6 @@ async function api(action: string, args: Record<string, unknown>) {
     return {};
   }
   throw new Error(`Unknown action ${action}`);
-}`);
 }
 function uid() { return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 function todayISO() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
@@ -420,7 +419,7 @@ export default function App() {
   const [prevContact, setPrevContact] = useState<{ id: string; name: string } | null>(null);
   const [backStack, setBackStack] = useState<{ id: string; name: string }[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"profile" | "shortcuts">("profile");
+  const [settingsTab, setSettingsTab] = useState<"profile" | "shortcuts" | "account">("profile");
   const [profile, setProfile] = useState<ProfileValue>(DEFAULT_PROFILE);
   const [profileDraft, setProfileDraft] = useState<ProfileValue>(DEFAULT_PROFILE);
   const [shortcuts, setShortcuts] = useState<ShortcutMap>({ ...DEFAULT_SHORTCUTS });
@@ -475,7 +474,7 @@ export default function App() {
     if (error) { setAuthError(error.message); return; }
     setAuthSent(true);
   };
-  const handleSignOut = async () => { await supabase.auth.signOut(); setContacts([]); setSelectedId(null); setPanelOpen(false); };
+  const handleSignOut = async () => { setSettingsOpen(false); await supabase.auth.signOut(); setContacts([]); setSelectedId(null); setPanelOpen(false); };
   const handleDeleteAllMyData = async () => {
     if (!user) return; setDeleteAllBusy(true);
     try {
@@ -739,7 +738,7 @@ export default function App() {
   }, [panelOpen, selectedId]); // eslint-disable-line
 
   // ---- Settings: Profile + Shortcuts ----
-  const openSettings = (tab: "profile" | "shortcuts") => {
+  const openSettings = (tab: "profile" | "shortcuts" | "account") => {
     setProfileDraft({ name: profile.name, socials: normalizeSocials(profile.socials) });
     setSettingsTab(tab);
     setSettingsOpen(true);
@@ -1085,35 +1084,78 @@ export default function App() {
   return (
     <div data-safe-area-inset-root style={{ boxSizing: "border-box", paddingTop: "var(--safe-area-inset-top)", minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="overflow-x-clip">
       <header data-safe-area-sticky-top style={{ top: "var(--safe-area-inset-top)", background: "var(--bg)", borderColor: "var(--divider)" }} className="sticky z-30 border-b">
-        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 sm:px-6 lg:flex-nowrap lg:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="h-[10px] w-[10px] shrink-0 rounded-[2px]" style={{ background: "#DB200D" }} aria-hidden="true" />
-            <div className="min-w-0"><p className="truncate text-[19px] font-medium leading-none tracking-[-0.01em]">Reach</p><p className="mt-1 truncate text-xs" style={{ color: "var(--muted)" }}>Outreach, curated.</p></div>
-          </div>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <div className="flex rounded-[12px] border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="group" aria-label="Theme">
-              {([{ v: "system", label: "System", Icon: Monitor }, { v: "light", label: "Light", Icon: Sun }, { v: "dark", label: "Dark", Icon: Moon }] as const).map(({ v, label, Icon }) => (
-                <button key={v} onClick={() => changeTheme(v)} aria-pressed={themeMode === v} className="flex min-h-[36px] items-center gap-1.5 rounded-[9px] px-2.5 text-xs font-medium sm:px-3" style={themeMode === v ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}><Icon size={14} /><span className="hidden sm:inline">{label}</span><span className="sm:hidden">{label.slice(0, 1)}</span></button>
-              ))}
-            </div>
-            <button onClick={exportCSV} className="flex min-h-[44px] items-center gap-2 rounded-[12px] border px-3.5 text-sm font-medium sm:px-4" style={{ borderColor: "var(--divider)" }}><Download size={16} /><span className="hidden sm:inline">Export spreadsheet</span><span className="sm:hidden">Export</span></button>
-            <button onClick={() => openAdd()} className="flex min-h-[44px] items-center gap-2 rounded-[12px] px-4 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
-            <div className="hidden items-center gap-2 md:flex"><span className="max-w-[180px] truncate rounded-full border px-3 py-2 text-xs font-medium" style={{ borderColor: "var(--divider)" }} title={user?.email || ""}>{user?.email || "Signed in"}</span><button onClick={handleSignOut} className="min-h-[36px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Sign out</button></div>
-            <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="flex min-h-[44px] items-center gap-2">
-              <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>
-              {profile.name ? <span className="hidden max-w-[120px] truncate text-sm font-medium sm:inline">{profile.name}</span> : null}
+        {isMobile ? (
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="shrink-0">
+              <span className="flex h-[44px] w-[44px] items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>
             </button>
+            <div className="flex items-center gap-2">
+              <span className="h-[10px] w-[10px] shrink-0 rounded-[2px]" style={{ background: "#DB200D" }} aria-hidden="true" />
+              <p className="text-[19px] font-medium leading-none tracking-[-0.01em]">Reach</p>
+            </div>
+            <button onClick={() => openAdd()} className="flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-4 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add</button>
           </div>
-        </div>
+        ) : (
+          <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 sm:px-6 lg:flex-nowrap lg:px-8">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="h-[10px] w-[10px] shrink-0 rounded-[2px]" style={{ background: "#DB200D" }} aria-hidden="true" />
+              <div className="min-w-0"><p className="truncate text-[19px] font-medium leading-none tracking-[-0.01em]">Reach</p><p className="mt-1 truncate text-xs" style={{ color: "var(--muted)" }}>Outreach, curated.</p></div>
+            </div>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <div className="flex rounded-[12px] border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="group" aria-label="Theme">
+                {([{ v: "system", label: "System", Icon: Monitor }, { v: "light", label: "Light", Icon: Sun }, { v: "dark", label: "Dark", Icon: Moon }] as const).map(({ v, label, Icon }) => (
+                  <button key={v} onClick={() => changeTheme(v)} aria-pressed={themeMode === v} className="flex min-h-[36px] items-center gap-1.5 rounded-[9px] px-2.5 text-xs font-medium sm:px-3" style={themeMode === v ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}><Icon size={14} /><span className="hidden sm:inline">{label}</span><span className="sm:hidden">{label.slice(0, 1)}</span></button>
+                ))}
+              </div>
+              <button onClick={exportCSV} className="flex min-h-[44px] items-center gap-2 rounded-[12px] border px-3.5 text-sm font-medium sm:px-4" style={{ borderColor: "var(--divider)" }}><Download size={16} /><span className="hidden sm:inline">Export spreadsheet</span><span className="sm:hidden">Export</span></button>
+              <button onClick={() => openAdd()} className="flex min-h-[44px] items-center gap-2 rounded-[12px] px-4 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
+              <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="flex min-h-[44px] items-center gap-2">
+                <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>
+                {profile.name ? <span className="hidden max-w-[120px] truncate text-sm font-medium sm:inline">{profile.name}</span> : null}
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
-      <main className="mx-auto max-w-[1440px] px-0 sm:px-6 lg:flex lg:max-w-none lg:items-start lg:px-0">
-        <section className="min-w-0 flex-1 lg:px-8 lg:py-6">
+      <main className="flex w-full max-w-none items-stretch px-0 sm:px-6 lg:px-8">
+        <section className="flex min-w-0 flex-1 flex-col py-6" style={{ minHeight: "calc(100vh - 69px)", paddingBottom: isMobile ? 110 : undefined }}>
           <div className="px-4 pt-5 sm:px-0 lg:pt-0">
             <p className="small-caps" style={{ color: "var(--muted)" }}>Your outreach</p>
-            <h1 className="mt-2 text-[clamp(30px,4vw,44px)] font-semibold leading-[1.05] tracking-[-0.025em]">Every conversation,<br className="hidden sm:block" /> held with care.</h1>
+            <h1 className="mt-2 text-[34px] font-semibold leading-[1.02] tracking-[-0.025em] sm:text-[clamp(30px,4vw,44px)]">Every conversation,<br /> held with care.</h1>
             <p className="mt-3 max-w-[560px] text-[15px] leading-relaxed" style={{ color: "var(--muted)" }}>Track who you reached out to, what was said, and what comes next — without losing the human thread.</p>
           </div>
+          {isMobile && (
+            <div className="mt-6 px-4">
+              <div className="grid grid-cols-3 gap-3">
+                {([{ kind: "today", label: "Today", value: counts.outreachToday }, { kind: "needs-follow-up", label: "Follow-up", value: counts.needsFollowUp }, { kind: "replied", label: "Replied", value: counts.replied }] as const).map((row) => (
+                  <button key={row.kind} onClick={() => applyFocus(row.kind)} className="rounded-[16px] border p-3.5 text-left" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
+                    <span className="block text-[26px] font-semibold leading-none tracking-[-0.02em]">{row.value}</span>
+                    <span className="mt-2 block text-[12px] font-medium leading-tight" style={{ color: "var(--muted)" }}>{row.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-5 grid grid-cols-4 gap-2">
+                <button onClick={() => openAdd()} className="flex flex-col items-center gap-2 py-1">
+                  <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}><Plus size={22} /></span>
+                  <span className="text-[12px] font-medium">Add</span>
+                </button>
+                <button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="flex flex-col items-center gap-2 py-1">
+                  <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}><Target size={20} /></span>
+                  <span className="text-[12px] font-medium">Focus</span>
+                </button>
+                <button onClick={() => { setPanelOpen(true); setMinimized(false); setActiveTemplateId(templates[0]?.id || null); }} className="flex flex-col items-center gap-2 py-1">
+                  <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}><FileText size={20} /></span>
+                  <span className="text-[12px] font-medium">Templates</span>
+                </button>
+                <button onClick={exportCSV} className="flex flex-col items-center gap-2 py-1">
+                  <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}><Download size={20} /></span>
+                  <span className="text-[12px] font-medium">Export</span>
+                </button>
+              </div>
+              <p className="mt-4 text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>{focusLine}</p>
+            </div>
+          )}
 
           <div className="mt-6 flex flex-col gap-3 px-4 sm:px-0 lg:flex-row lg:items-center">
             <div className="relative flex-1">
@@ -1129,11 +1171,11 @@ export default function App() {
           </div>
           <p className="mt-4 px-4 text-sm sm:px-0" style={{ color: "var(--muted)" }} aria-live="polite">{counts.total} contacts • {counts.replied} replied • {counts.followed} followed up</p>
           {activeFocus && <div className="mt-3 flex flex-wrap items-center gap-2 px-4 sm:px-0"><span className="inline-flex min-h-[32px] items-center rounded-full px-3 text-xs font-medium" style={{ background: "var(--text)", color: "var(--bg)" }}>Showing: {activeFocus}</span><button onClick={() => { setActiveFocus(null); setFilter("all"); }} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>Clear</button></div>}
-          {!selected && <div className="mt-3 px-4 sm:px-0 lg:hidden"><button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="min-h-[40px] rounded-[10px] border px-3.5 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Today focus &amp; quick capture</button></div>}
+          {!selected && !isMobile && <div className="mt-3 px-4 sm:px-0 lg:hidden"><button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="min-h-[40px] rounded-[10px] border px-3.5 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Today focus &amp; quick capture</button></div>}
 
           {loadError && <div className="mx-4 mt-4 flex items-start gap-3 rounded-[12px] border p-4 sm:mx-0" style={{ borderColor: "var(--divider)" }}><AlertTriangle size={18} className="mt-0.5 shrink-0" /><div><p className="text-sm font-medium">Couldn’t reach your saved contacts.</p><p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>{loadError}</p><button onClick={loadAll} className="mt-3 min-h-[40px] rounded-[10px] border px-3 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Try again</button></div></div>}
 
-          <div className="mt-3 border-t" style={{ borderColor: "var(--divider)" }}>
+          <div className="mt-3 border-t" style={{ borderColor: "var(--divider)", marginLeft: 0, marginRight: 0 }}>
             {loading ? <p className="px-4 py-12 text-center text-sm" style={{ color: "var(--muted)" }}>Loading your outreach…</p> : filtered.length === 0 ? (
               contacts.length === 0 && !search && filter === "all" ? (
                 <div className="px-4 py-16 text-center sm:py-20">
@@ -1175,10 +1217,7 @@ export default function App() {
               );
             })}
           </div>
-          <footer className="px-4 py-6 text-xs sm:px-2" style={{ color: "var(--muted)" }}>{counts.total} contacts • Data saved to your private account • {user?.email || ""}</footer>
-          <div className="px-4 py-3 text-xs sm:px-2" style={{ color: "var(--muted)" }}>
-            Signed in as {user?.email} • <button onClick={handleSignOut} className="underline underline-offset-4" style={{ color: "var(--brand)" }}>Sign out</button> • <button onClick={() => setShowDeleteAll(true)} className="underline underline-offset-4" style={{ color: "#DB200D" }}>Delete all my data</button>
-          </div>
+          {!isMobile && <footer className="mt-auto px-4 pt-8 pb-2 text-xs sm:px-0" style={{ color: "var(--muted)" }}>{counts.total} contacts • Data saved to your private account</footer>}
           {showDeleteAll && (
             <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Delete all my data">
               <button aria-label="Close" onClick={() => setShowDeleteAll(false)} className="absolute inset-0 bg-black/35" />
@@ -1191,7 +1230,7 @@ export default function App() {
           )}
         </section>
         {isDesktop && (
-          <aside aria-label="Contact details" className="relative sticky flex shrink-0 flex-col border-l" style={{ top: "calc(var(--safe-area-inset-top) + 69px)", height: "calc(100vh - var(--safe-area-inset-top) - 69px)", width: minimized ? 56 : panelWidth, borderColor: "var(--divider)", background: "var(--bg)" }}>
+          <aside aria-label="Contact details" className="relative sticky flex shrink-0 flex-col border-l self-stretch" style={{ top: "calc(var(--safe-area-inset-top) + 69px)", minHeight: "calc(100vh - var(--safe-area-inset-top) - 69px)", width: minimized ? 56 : panelWidth, borderColor: "var(--divider)", background: "var(--bg)" }}>
             {!minimized && (
               <>
                 <div role="separator" aria-orientation="vertical" aria-label="Resize details panel" aria-valuenow={panelWidth} aria-valuemin={360} aria-valuemax={540} tabIndex={0} onKeyDown={e => { if (e.key === "ArrowLeft") setPanelWidth(w => Math.max(360, w - 20)); if (e.key === "ArrowRight") setPanelWidth(w => Math.min(540, w + 20)); }} onMouseDown={startResize} className="absolute bottom-0 left-0 top-0 z-10 flex w-[12px] -translate-x-[6px] cursor-ew-resize items-center justify-center opacity-0 hover:opacity-100 focus:opacity-100" style={{ background: "transparent" }}><span className="flex h-[44px] w-[8px] items-center justify-center rounded-full" style={{ background: "var(--divider)" }}><GripVertical size={12} style={{ color: "var(--muted)" }} /></span></div>
@@ -1212,6 +1251,28 @@ export default function App() {
           </aside>
         )}
       </main>
+
+      {isMobile && !settingsOpen && !modal && !deleteTarget && !showDeleteAll && (
+        <nav aria-label="Mobile navigation" className="fixed bottom-4 left-1/2 z-40 flex w-[calc(100vw-32px)] max-w-[400px] -translate-x-1/2 items-center justify-between rounded-full border px-2 py-2" style={{ background: "var(--surface)", borderColor: "var(--divider)", boxShadow: "var(--shadow)" }}>
+          <button onClick={() => { setFilter("all"); setActiveFocus(null); setPanelOpen(false); window.scrollTo({ top: 0, behavior: "smooth" }); }} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5">
+            <Home size={20} />
+            <span className="text-[11px] font-medium">Home</span>
+          </button>
+          <button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
+            <Target size={20} />
+            <span className="text-[11px] font-medium">Focus</span>
+          </button>
+          <button onClick={() => openAdd()} aria-label="Add contact" className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}><Plus size={24} /></button>
+          <button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
+            <FileText size={20} />
+            <span className="text-[11px] font-medium">Notes</span>
+          </button>
+          <button onClick={() => openSettings("profile")} aria-label="Open settings" className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
+            <span className="flex h-[24px] w-[24px] items-center justify-center rounded-full text-[11px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }}>{headerInitials}</span>
+            <span className="text-[11px] font-medium">You</span>
+          </button>
+        </nav>
+      )}
 
       {isTablet && panelOpen && !minimized && (
         <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" aria-label="Contact details">
@@ -1243,27 +1304,86 @@ export default function App() {
       {settingsOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Settings">
           <button aria-label="Close settings" onClick={() => setSettingsOpen(false)} className="absolute inset-0 bg-black/35" />
-          <div className="animate-fade relative max-h-[92vh] w-full max-w-[620px] overflow-y-auto rounded-t-[16px] p-5 sm:rounded-[16px] sm:p-6" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <div className="flex items-start justify-between gap-4"><div><p className="small-caps" style={{ color: "var(--muted)" }}>Settings</p><h2 className="mt-2 text-[24px] font-semibold">Profile &amp; Shortcuts</h2></div><button onClick={() => setSettingsOpen(false)} aria-label="Close settings" className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]"><X size={19} /></button></div>
-            <div className="mt-5 flex gap-1 border-b" style={{ borderColor: "var(--divider)" }} role="tablist" aria-label="Settings tabs">
-              {(["profile", "shortcuts"] as const).map(t => (
-                <button key={t} role="tab" aria-selected={settingsTab === t} onClick={() => setSettingsTab(t)} className="min-h-[40px] px-4 text-sm font-medium" style={settingsTab === t ? { borderBottom: "2px solid var(--text)" } : { color: "var(--muted)", borderBottom: "2px solid transparent" }}>{t === "profile" ? "Profile" : "Shortcuts"}</button>
+          <div className="animate-fade relative max-h-[92vh] w-full max-w-[620px] overflow-y-auto rounded-t-[24px] p-5 sm:rounded-[24px] sm:p-6" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+            <div className="flex items-start justify-between gap-4"><div><p className="small-caps" style={{ color: "var(--muted)" }}>Settings</p><h2 className="mt-2 text-[24px] font-semibold">Settings</h2></div><button onClick={() => setSettingsOpen(false)} aria-label="Close settings" className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]"><X size={19} /></button></div>
+            <div className="mt-5 flex gap-1 rounded-full border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="tablist" aria-label="Settings tabs">
+              {(["profile", "shortcuts", "account"] as const).map(t => (
+                <button key={t} role="tab" aria-selected={settingsTab === t} onClick={() => setSettingsTab(t)} className="min-h-[40px] flex-1 rounded-full px-4 text-sm font-medium" style={settingsTab === t ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{t === "profile" ? "Profile" : t === "shortcuts" ? "Shortcuts" : "Account"}</button>
               ))}
             </div>
             {settingsTab === "profile" ? (
-              <div className="pt-6">
-                <div className="flex flex-col items-center text-center">
-                  <span className="flex h-[96px] w-[96px] items-center justify-center rounded-full text-[34px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{draftInitials}</span>
-                  <button type="button" disabled aria-disabled="true" title="Photo upload is not available yet" className="mt-4 min-h-[44px] cursor-not-allowed rounded-[12px] border px-4 text-sm font-medium opacity-50" style={{ borderColor: "var(--divider)" }}>Upload your photo</button>
-                  <p className="mt-2 max-w-[340px] text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Photo upload is not available yet in this app — your initials will show until then.</p>
+              <div className="pt-5">
+                {/* Top row — avatar left, Save pill right */}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="flex h-[56px] w-[56px] shrink-0 items-center justify-center rounded-full text-[20px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{draftInitials}</span>
+                  <button onClick={saveProfile} className="flex min-h-[40px] items-center gap-1.5 rounded-full px-5 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Check size={15} /> Save</button>
                 </div>
+
+                {/* Big title — name in red + email below */}
+                <div className="mt-5">
+                  <h3 className="text-[32px] font-semibold leading-[1.02] tracking-[-0.02em]" style={{ color: "#DB200D" }}>{profileDraft.name?.trim() ? profileDraft.name.trim() : "Your profile"}</h3>
+                  <p className="mt-2 truncate text-[26px] font-semibold leading-tight tracking-[-0.01em]">{user?.email || "Signed in"}</p>
+                  <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>This is how you show up in Reach. Your name and photo are only for you — they never go on the main screen.</p>
+                </div>
+
+                {/* Two cards — Reach counts only */}
+                <div className="mt-6 grid grid-cols-2 gap-3">
+                  <div className="rounded-[20px] border p-4" style={{ borderColor: "var(--divider)" }}>
+                    <p className="text-[13px]" style={{ color: "var(--muted)" }}>Contacts</p>
+                    <p className="mt-2 text-[28px] font-semibold leading-none">{counts.total}</p>
+                    <div className="mt-4 flex items-center justify-between">
+                      <span className="flex h-[32px] w-[32px] items-center justify-center rounded-full" style={{ background: "var(--tint)" }}><Users size={16} /></span>
+                      <span className="rounded-full border px-2.5 py-1 text-xs font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>Total</span>
+                    </div>
+                  </div>
+                  <div className="rounded-[20px] border p-4" style={{ borderColor: "var(--divider)" }}>
+                    <p className="text-[13px]" style={{ color: "var(--muted)" }}>Replied</p>
+                    <p className="mt-2 text-[28px] font-semibold leading-none">{counts.replied}</p>
+                    <div className="mt-4 flex items-center justify-between">
+                      <span className="flex h-[32px] w-[32px] items-center justify-center rounded-full" style={{ background: "var(--tint)" }}><Check size={16} /></span>
+                      <span className="rounded-full border px-2.5 py-1 text-xs font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{counts.total > 0 ? `${Math.round((counts.replied / counts.total) * 100)}%` : "0%"}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6 border-t" style={{ borderColor: "var(--divider)" }} />
+
+                {/* Four quick actions — Reach actions */}
+                <div className="mt-5 grid grid-cols-4 gap-2">
+                  <button type="button" disabled aria-disabled="true" title="Photo upload is not available yet" className="flex flex-col items-center gap-2 py-1 opacity-60">
+                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}><Camera size={20} /></span>
+                    <span className="text-[12px] font-medium">Photo</span>
+                  </button>
+                  <button type="button" onClick={() => document.getElementById("profile-name")?.focus()} className="flex flex-col items-center gap-2 py-1">
+                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }}><Pencil size={19} /></span>
+                    <span className="text-[12px] font-medium">Name</span>
+                  </button>
+                  <button type="button" onClick={() => document.getElementById("profile-socials")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="flex flex-col items-center gap-2 py-1">
+                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }}><Link2 size={19} /></span>
+                    <span className="text-[12px] font-medium">Socials</span>
+                  </button>
+                  <button type="button" onClick={() => changeTheme(themeMode === "light" ? "dark" : themeMode === "dark" ? "system" : "light")} className="flex flex-col items-center gap-2 py-1">
+                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }}>{themeMode === "dark" ? <Moon size={19} /> : <Sun size={19} />}</span>
+                    <span className="text-[12px] font-medium">Theme</span>
+                  </button>
+                </div>
+
+                {/* Soft banner — Reach tip */}
+                <div className="mt-6 flex items-center justify-between gap-3 rounded-[20px] p-4" style={{ background: "var(--tint)" }}>
+                  <p className="text-sm leading-relaxed">Photo upload is not live yet — your initials show until then. Add a name and a social so your profile feels finished.</p>
+                  <button onClick={() => document.getElementById("profile-socials")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="shrink-0 rounded-full px-4 py-2.5 text-sm font-medium text-white" style={{ background: "#DB200D" }}>Add</button>
+                </div>
+
+                {/* Name field */}
                 <div className="mt-7"><label htmlFor="profile-name" className="small-caps block" style={{ color: "var(--muted)" }}>Name</label><input id="profile-name" value={profileDraft.name} onChange={e => setProfileDraft(d => ({ ...d, name: e.target.value }))} placeholder="Your name" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-                <div className="mt-8">
+
+                {/* Socials — card style */}
+                <div id="profile-socials" className="mt-8 scroll-mt-4">
                   <h3 className="text-[16px] font-semibold">Link social accounts</h3>
                   <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Add a handle or a full URL for each account. Linked accounts save with your profile.</p>
-                  <div className="mt-4 space-y-4">
+                  <div className="mt-4 space-y-3">
                     {profileDraft.socials.map(s => s.custom ? (
-                      <div key={s.id} className="space-y-2">
+                      <div key={s.id} className="space-y-2 rounded-[16px] border p-3" style={{ borderColor: "var(--divider)" }}>
                         <div className="flex gap-2">
                           <input aria-label="Platform name" value={s.platform} onChange={e => updateSocial(s.id, "platform", e.target.value)} placeholder="Platform name" className="h-[48px] min-w-0 flex-1 rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
                           <button onClick={() => removeCustomSocial(s.id)} aria-label="Remove custom platform" className="flex min-h-[44px] shrink-0 items-center rounded-[10px] border px-3 text-sm font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>Remove</button>
@@ -1271,7 +1391,7 @@ export default function App() {
                         <input aria-label={`Handle or URL for ${s.platform || "custom platform"}`} value={s.value} onChange={e => updateSocial(s.id, "value", e.target.value)} placeholder="@handle or https://..." className="h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
                       </div>
                     ) : (
-                      <div key={s.id}>
+                      <div key={s.id} className="rounded-[16px] border p-3" style={{ borderColor: "var(--divider)" }}>
                         <label htmlFor={`social-${s.id}`} className="small-caps block" style={{ color: "var(--muted)" }}>{s.platform}</label>
                         <input id={`social-${s.id}`} value={s.value} onChange={e => updateSocial(s.id, "value", e.target.value)} placeholder={socialPlaceholder(s.platform)} className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
                       </div>
@@ -1279,22 +1399,28 @@ export default function App() {
                   </div>
                   <button onClick={addCustomSocial} className="mt-4 min-h-[40px] rounded-[10px] border px-4 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>+ Add another</button>
                   {linkedSocials.length > 0 && (
-                    <div className="mt-6">
-                      <p className="small-caps" style={{ color: "var(--muted)" }}>Linked accounts</p>
-                      <ul className="mt-2 border-t" style={{ borderColor: "var(--divider)" }}>
-                        {linkedSocials.map(s => (
-                          <li key={s.id} className="flex items-center justify-between gap-3 border-b py-3" style={{ borderColor: "var(--divider)" }}>
-                            <span className="text-sm font-medium">{s.platform || "Custom platform"}</span>
-                            <a href={socialHref(s.platform, s.value)} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate text-sm font-medium underline decoration-1 underline-offset-4" style={{ color: "var(--brand)" }}>{socialDisplay(s.platform, s.value)}</a>
-                          </li>
-                        ))}
-                      </ul>
+                    <div className="mt-6 rounded-[20px] border p-4" style={{ borderColor: "var(--divider)" }}>
+                      <div className="flex items-start gap-3">
+                        <span className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-full" style={{ background: "var(--tint)" }}><AtSign size={17} /></span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[15px] font-semibold">Linked accounts</p>
+                          <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>{linkedSocials.length} {linkedSocials.length === 1 ? "account" : "accounts"} linked. Tap one to open it.</p>
+                          <ul className="mt-3 space-y-2">
+                            {linkedSocials.map(s => (
+                              <li key={s.id} className="flex items-center justify-between gap-3 border-t py-2.5" style={{ borderColor: "var(--divider)" }}>
+                                <span className="text-sm font-medium">{s.platform || "Custom platform"}</span>
+                                <a href={socialHref(s.platform, s.value)} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate text-sm font-medium underline decoration-1 underline-offset-4" style={{ color: "var(--brand)" }}>{socialDisplay(s.platform, s.value)}</a>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
                 <div className="mt-8 flex gap-2"><button onClick={() => setSettingsOpen(false)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button onClick={saveProfile} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white" style={{ background: "#DB200D" }}>Save profile</button></div>
               </div>
-            ) : (
+            ) : settingsTab === "shortcuts" ? (
               <div className="pt-2">
                 <p className="mt-4 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Shortcuts pause while typing, except Esc and Ctrl/Cmd + Enter. Press <span className="font-medium" style={{ color: "var(--text)" }}>?</span> to open this tab.</p>
                 {SHORTCUT_GROUPS.map(g => (
@@ -1318,6 +1444,29 @@ export default function App() {
                 ))}
                 {capturing && <p role="status" className="mt-4 text-sm" style={{ color: "var(--muted)" }}>Press a key… Esc cancels.</p>}
                 <div className="mt-6 flex gap-2"><button onClick={resetShortcuts} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Reset to defaults</button><button onClick={saveShortcuts} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white" style={{ background: "#DB200D" }}>Save shortcuts</button></div>
+              </div>
+            ) : (
+              <div className="pt-6">
+                <h3 className="text-[16px] font-semibold">Account</h3>
+                <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Your login and your data live here. Nothing about your account shows on the main screen.</p>
+                <div className="mt-5">
+                  <p className="small-caps" style={{ color: "var(--muted)" }}>Appearance</p>
+                  <div className="mt-2 flex rounded-[12px] border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="group" aria-label="Theme">
+                    {([{ v: "system", label: "System" }, { v: "light", label: "Light" }, { v: "dark", label: "Dark" }] as const).map(({ v, label }) => (
+                      <button key={v} onClick={() => changeTheme(v)} aria-pressed={themeMode === v} className="min-h-[40px] flex-1 rounded-[9px] px-2 text-sm font-medium" style={themeMode === v ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{label}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-5 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}>
+                  <p className="small-caps" style={{ color: "var(--muted)" }}>Signed in as</p>
+                  <p className="mt-2 truncate text-[15px] font-medium">{user?.email || "Signed in"}</p>
+                  <p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>{counts.total} contacts • Data saved to your private account</p>
+                </div>
+                <div className="mt-4 flex flex-col gap-2">
+                  <button onClick={handleSignOut} className="min-h-[46px] w-full rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Sign out</button>
+                  <button onClick={() => { setSettingsOpen(false); setShowDeleteAll(true); }} className="min-h-[46px] w-full rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)", color: "#DB200D" }}>Delete all my data…</button>
+                </div>
+                <p className="mt-4 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Deleting removes all your contacts, notes, templates and settings from this account. Your login stays, but with no data. This cannot be undone.</p>
               </div>
             )}
           </div>
