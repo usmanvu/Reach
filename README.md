@@ -1,4 +1,4 @@
-# Reach - Outreach Tracker
+# Reach — Outreach Tracker
 
 Track creators, follow-ups and outreach in one place. Built with React + Vite + Supabase.
 
