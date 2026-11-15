@@ -1096,7 +1096,7 @@ export default function App() {
             <button onClick={() => openAdd()} className="flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-4 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add</button>
           </div>
         ) : (
-          <div className="mx-auto flex max-w-[1440px] flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 sm:px-6 lg:flex-nowrap lg:px-8">
+          <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 sm:px-6 lg:flex-nowrap lg:px-8">
             <div className="flex min-w-0 items-center gap-3">
               <span className="h-[10px] w-[10px] shrink-0 rounded-[2px]" style={{ background: "#DB200D" }} aria-hidden="true" />
               <div className="min-w-0"><p className="truncate text-[19px] font-medium leading-none tracking-[-0.01em]">Reach</p><p className="mt-1 truncate text-xs" style={{ color: "var(--muted)" }}>Outreach, curated.</p></div>
@@ -1118,7 +1118,7 @@ export default function App() {
         )}
       </header>
 
-      <main className="mx-auto flex w-full max-w-[1440px] items-stretch px-0 sm:px-6 lg:px-8">
+      <main className="flex w-full max-w-none items-stretch px-0 sm:px-6 lg:px-8">
         <section className="flex min-w-0 flex-1 flex-col py-6" style={{ minHeight: "calc(100vh - 69px)", paddingBottom: isMobile ? 110 : undefined }}>
           <div className="px-4 pt-5 sm:px-0 lg:pt-0">
             <p className="small-caps" style={{ color: "var(--muted)" }}>Your outreach</p>
