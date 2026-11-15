@@ -183,11 +183,73 @@ const DEFAULT_TEMPLATES: TemplateItem[] = [
   { id: "thank-you", title: "Thank you / after collab", text: "Hi [Name],\n\nThank you for the conversation — I really enjoyed [detail] and working through it with you.\n\nIf anything comes up down the line, I'm happy to help. Let's stay in touch.\n\nWarmly" },
 ];
 type ModalState = { mode: "add" } | { mode: "edit"; contact: Contact } | null;
+// --- Vercel fix: localStorage instead of backend ---
+// The original version called fetch("actions") which only exists inside Meta AI.
+// On Vercel there is no backend, so we store everything in the browser.
+const LS_CONTACTS_KEY = "reach:contacts:v1";
+const LS_SETTINGS_KEY = "reach:settings:v1";
+function loadLS<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch { return fallback; }
+}
+function saveLS(key: string, value: unknown) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or private mode */ }
+}
 async function api(action: string, args: Record<string, unknown>) {
-  const res = await fetch("actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, args }) });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error || `Request failed (${res.status})`);
-  return json.data;
+  if (action === "records.list") {
+    if (args.collection === "outreach-contacts") {
+      const records = loadLS<Contact[]>(LS_CONTACTS_KEY, []);
+      return { records, next_cursor: undefined };
+    }
+    if (args.collection === "outreach-settings") {
+      const stored = loadLS<{ id: string; value: unknown } | null>(LS_SETTINGS_KEY, null);
+      return { records: stored ? [stored] : [] };
+    }
+    return { records: [] };
+  }
+  if (action === "records.create") {
+    if (args.collection === "outreach-contacts") {
+      const records = loadLS<Contact[]>(LS_CONTACTS_KEY, []);
+      const id = uid();
+      const rec = { id, value: args.value } as Contact;
+      records.push(rec);
+      saveLS(LS_CONTACTS_KEY, records);
+      return { id };
+    }
+    if (args.collection === "outreach-settings") {
+      const id = uid();
+      saveLS(LS_SETTINGS_KEY, { id, value: args.value });
+      return { id };
+    }
+    return { id: uid() };
+  }
+  if (action === "records.replace") {
+    if (args.collection === "outreach-contacts") {
+      const records = loadLS<Contact[]>(LS_CONTACTS_KEY, []);
+      const next = records.map((r) => (r.id === args.id ? { ...r, value: args.value as ContactValue } : r));
+      saveLS(LS_CONTACTS_KEY, next);
+      return {};
+    }
+    if (args.collection === "outreach-settings") {
+      const stored = loadLS<{ id: string; value: unknown } | null>(LS_SETTINGS_KEY, null);
+      if (stored) saveLS(LS_SETTINGS_KEY, { id: stored.id, value: args.value });
+      else saveLS(LS_SETTINGS_KEY, { id: String(args.id), value: args.value });
+      return {};
+    }
+    return {};
+  }
+  if (action === "records.delete") {
+    if (args.collection === "outreach-contacts") {
+      const records = loadLS<Contact[]>(LS_CONTACTS_KEY, []);
+      saveLS(LS_CONTACTS_KEY, records.filter((r) => r.id !== args.id));
+      return {};
+    }
+    return {};
+  }
+  throw new Error(`Unknown action ${action}`);
 }
 function uid() { return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 function todayISO() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
@@ -1032,7 +1094,7 @@ export default function App() {
               );
             })}
           </div>
-          <footer className="px-4 py-6 text-xs sm:px-2" style={{ color: "var(--muted)" }}>{counts.total} contacts • Data saved to your workspace</footer>
+          <footer className="px-4 py-6 text-xs sm:px-2" style={{ color: "var(--muted)" }}>{counts.total} contacts • Data saved in this browser</footer>
         </section>
         {isDesktop && (
           <aside aria-label="Contact details" className="relative sticky flex shrink-0 flex-col border-l" style={{ top: "calc(var(--safe-area-inset-top) + 69px)", height: "calc(100vh - var(--safe-area-inset-top) - 69px)", width: minimized ? 56 : panelWidth, borderColor: "var(--divider)", background: "var(--bg)" }}>
