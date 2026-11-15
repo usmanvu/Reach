@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import { Search, Plus, Download, Pencil, Trash2, X, Minus, ExternalLink, Copy, Check, ChevronDown, ChevronUp, GripVertical, AlertTriangle, Sun, Moon, Monitor } from "lucide-react";
 
 type ContactValue = { name: string; channel: string; outreachDate: string; contactDetails: string; link: string; replied: boolean; followedUp: boolean; notes: string; createdAt: string; updatedAt: string; };
@@ -183,68 +184,56 @@ const DEFAULT_TEMPLATES: TemplateItem[] = [
   { id: "thank-you", title: "Thank you / after collab", text: "Hi [Name],\n\nThank you for the conversation — I really enjoyed [detail] and working through it with you.\n\nIf anything comes up down the line, I'm happy to help. Let's stay in touch.\n\nWarmly" },
 ];
 type ModalState = { mode: "add" } | { mode: "edit"; contact: Contact } | null;
-// --- Vercel fix: localStorage instead of backend ---
-// The original version called fetch("actions") which only exists inside Meta AI.
-// On Vercel there is no backend, so we store everything in the browser.
-const LS_CONTACTS_KEY = "reach:contacts:v1";
-const LS_SETTINGS_KEY = "reach:settings:v1";
-function loadLS<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch { return fallback; }
-}
-function saveLS(key: string, value: unknown) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or private mode */ }
-}
+// --- Supabase: per-user cloud storage ---
+// Each user has their own rows. RLS in Supabase ensures a user can only see their own data.
 async function api(action: string, args: Record<string, unknown>) {
+  if (!isSupabaseConfigured) throw new Error("Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel.");
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Please sign in to see your contacts.");
   if (action === "records.list") {
     if (args.collection === "outreach-contacts") {
-      const records = loadLS<Contact[]>(LS_CONTACTS_KEY, []);
+      const { data, error } = await supabase.from("outreach_contacts").select("id, value").eq("user_id", user.id).order("created_at", { ascending: false }).limit(1000);
+      if (error) throw error;
+      const records = (data || []).map((r: any) => ({ id: r.id, value: r.value as ContactValue }));
       return { records, next_cursor: undefined };
     }
     if (args.collection === "outreach-settings") {
-      const stored = loadLS<{ id: string; value: unknown } | null>(LS_SETTINGS_KEY, null);
-      return { records: stored ? [stored] : [] };
+      const { data, error } = await supabase.from("outreach_settings").select("id, value").eq("user_id", user.id).limit(1).maybeSingle();
+      if (error) throw error;
+      return { records: data ? [{ id: data.id, value: data.value }] : [] };
     }
     return { records: [] };
   }
   if (action === "records.create") {
     if (args.collection === "outreach-contacts") {
-      const records = loadLS<Contact[]>(LS_CONTACTS_KEY, []);
-      const id = uid();
-      const rec = { id, value: args.value } as Contact;
-      records.push(rec);
-      saveLS(LS_CONTACTS_KEY, records);
-      return { id };
+      const { data, error } = await supabase.from("outreach_contacts").insert({ user_id: user.id, value: args.value }).select("id").single();
+      if (error) throw error;
+      return { id: data.id };
     }
     if (args.collection === "outreach-settings") {
-      const id = uid();
-      saveLS(LS_SETTINGS_KEY, { id, value: args.value });
-      return { id };
+      const { data, error } = await supabase.from("outreach_settings").insert({ user_id: user.id, value: args.value }).select("id").single();
+      if (error) throw error;
+      return { id: data.id };
     }
     return { id: uid() };
   }
   if (action === "records.replace") {
     if (args.collection === "outreach-contacts") {
-      const records = loadLS<Contact[]>(LS_CONTACTS_KEY, []);
-      const next = records.map((r) => (r.id === args.id ? { ...r, value: args.value as ContactValue } : r));
-      saveLS(LS_CONTACTS_KEY, next);
+      const { error } = await supabase.from("outreach_contacts").update({ value: args.value }).eq("id", args.id).eq("user_id", user.id);
+      if (error) throw error;
       return {};
     }
     if (args.collection === "outreach-settings") {
-      const stored = loadLS<{ id: string; value: unknown } | null>(LS_SETTINGS_KEY, null);
-      if (stored) saveLS(LS_SETTINGS_KEY, { id: stored.id, value: args.value });
-      else saveLS(LS_SETTINGS_KEY, { id: String(args.id), value: args.value });
+      const { error } = await supabase.from("outreach_settings").update({ value: args.value }).eq("id", args.id).eq("user_id", user.id);
+      if (error) throw error;
       return {};
     }
     return {};
   }
   if (action === "records.delete") {
     if (args.collection === "outreach-contacts") {
-      const records = loadLS<Contact[]>(LS_CONTACTS_KEY, []);
-      saveLS(LS_CONTACTS_KEY, records.filter((r) => r.id !== args.id));
+      const { error } = await supabase.from("outreach_contacts").delete().eq("id", args.id).eq("user_id", user.id);
+      if (error) throw error;
       return {};
     }
     return {};
@@ -435,6 +424,15 @@ export default function App() {
   const [profileDraft, setProfileDraft] = useState<ProfileValue>(DEFAULT_PROFILE);
   const [shortcuts, setShortcuts] = useState<ShortcutMap>({ ...DEFAULT_SHORTCUTS });
   const [capturing, setCapturing] = useState<ShortcutAction | null>(null);
+  // --- Auth (Option B: per-user) ---
+  const [user, setUser] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authSent, setAuthSent] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [showDeleteAll, setShowDeleteAll] = useState(false);
+  const [deleteAllBusy, setDeleteAllBusy] = useState(false);
   const isMobile = useMedia("(max-width: 767px)");
   const isTablet = useMedia("(min-width: 768px) and (max-width: 1023px)");
   const isDesktop = useMedia("(min-width: 1024px)");
@@ -457,6 +455,37 @@ export default function App() {
     setToast(msg);
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 3200);
+  };
+
+  // --- Auth effects ---
+  useEffect(() => {
+    if (!isSupabaseConfigured) { setAuthLoading(false); return; }
+    supabase.auth.getSession().then(({ data }) => { setUser(data.session?.user ?? null); setAuthLoading(false); });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { setUser(session?.user ?? null); setAuthLoading(false); });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  const handleSendMagicLink = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; }
+    setAuthBusy(true); setAuthError(null);
+    const { error } = await supabase.auth.signInWithOtp({ email: authEmail.trim(), options: { emailRedirectTo: window.location.origin } });
+    setAuthBusy(false);
+    if (error) { setAuthError(error.message); return; }
+    setAuthSent(true);
+  };
+  const handleSignOut = async () => { await supabase.auth.signOut(); setContacts([]); setSelectedId(null); setPanelOpen(false); };
+  const handleDeleteAllMyData = async () => {
+    if (!user) return; setDeleteAllBusy(true);
+    try {
+      const { error: cErr } = await supabase.from("outreach_contacts").delete().eq("user_id", user.id);
+      if (cErr) throw cErr;
+      const { error: sErr } = await supabase.from("outreach_settings").delete().eq("user_id", user.id);
+      if (sErr) throw sErr;
+      setContacts([]); setSelectedId(null); setPanelOpen(false); setScratchpad(""); setTemplates(DEFAULT_TEMPLATES); setProfile(DEFAULT_PROFILE);
+      setShowDeleteAll(false); showToast("All your data was deleted");
+    } catch (e) { showToast(e instanceof Error ? e.message : "Could not delete data"); }
+    finally { setDeleteAllBusy(false); }
   };
 
   const reloadContacts = useCallback(async () => {
@@ -503,7 +532,7 @@ export default function App() {
     finally { setLoading(false); }
   }, [reloadContacts]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { if (user) loadAll(); }, [user, loadAll]);
 
   useEffect(() => { document.title = "Reach — Outreach, curated."; }, []);
 
@@ -1002,6 +1031,56 @@ export default function App() {
     </div>
   );
 
+  // --- Auth screens ---
+  if (authLoading) {
+    return (<div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center" }}><p style={{ color: "var(--muted)" }}>Loading Reach…</p></div>);
+  }
+  if (!isSupabaseConfigured) {
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <div style={{ maxWidth: 520, width: "100%", textAlign: "center" }}>
+          <p className="small-caps" style={{ color: "var(--muted)" }}>Reach • Setup needed</p>
+          <h1 className="mt-3 text-[32px] font-semibold">Connect Supabase first</h1>
+          <p className="mt-3 leading-relaxed" style={{ color: "var(--muted)" }}>Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel → Settings → Environment Variables, then redeploy. See SUPABASE-SETUP.txt in the files you downloaded.</p>
+        </div>
+      </div>
+    );
+  }
+  if (!user) {
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="flex items-center justify-center px-4 py-10">
+        <div className="w-full max-w-[440px]">
+          <div className="text-center">
+            <span className="mx-auto block h-[10px] w-[10px] rounded-[2px]" style={{ background: "#DB200D" }} />
+            <h1 className="mt-4 text-[34px] font-semibold tracking-[-0.02em]">Reach</h1>
+            <p className="mt-1 text-[15px]" style={{ color: "var(--muted)" }}>Outreach, curated. Your data, only yours.</p>
+          </div>
+          <div className="mt-8 rounded-[16px] border p-6" style={{ borderColor: "var(--divider)", background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+            <p className="small-caps" style={{ color: "var(--muted)" }}>Sign in</p>
+            <h2 className="mt-2 text-[22px] font-semibold">Your outreach follows you</h2>
+            <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Enter your email. We will send you a magic link. No password to remember. Each account sees only its own contacts.</p>
+            {authSent ? (
+              <div className="mt-5 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}>
+                <p className="font-medium">Check your inbox</p>
+                <p className="mt-1 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>We sent a sign-in link to <b style={{ color: "var(--text)" }}>{authEmail}</b>. Open it on this device. It expires in 1 hour.</p>
+                <button onClick={() => setAuthSent(false)} className="mt-3 text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Use a different email</button>
+              </div>
+            ) : (
+              <form onSubmit={handleSendMagicLink} className="mt-5 space-y-3">
+                <label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label>
+                <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="you@example.com" required className="h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
+                {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
+                <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Sending…" : "Send magic link"}</button>
+                <p className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>By signing in you agree your contacts are stored privately under your account. You can export or delete all your data anytime from Settings.</p>
+              </form>
+            )}
+          </div>
+          <p className="mt-4 text-center text-xs" style={{ color: "var(--muted)" }}>Data saved in Supabase • Row Level Security • You own your data</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div data-safe-area-inset-root style={{ boxSizing: "border-box", paddingTop: "var(--safe-area-inset-top)", minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="overflow-x-clip">
       <header data-safe-area-sticky-top style={{ top: "var(--safe-area-inset-top)", background: "var(--bg)", borderColor: "var(--divider)" }} className="sticky z-30 border-b">
@@ -1018,6 +1097,7 @@ export default function App() {
             </div>
             <button onClick={exportCSV} className="flex min-h-[44px] items-center gap-2 rounded-[12px] border px-3.5 text-sm font-medium sm:px-4" style={{ borderColor: "var(--divider)" }}><Download size={16} /><span className="hidden sm:inline">Export spreadsheet</span><span className="sm:hidden">Export</span></button>
             <button onClick={() => openAdd()} className="flex min-h-[44px] items-center gap-2 rounded-[12px] px-4 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
+            <div className="hidden items-center gap-2 md:flex"><span className="max-w-[180px] truncate rounded-full border px-3 py-2 text-xs font-medium" style={{ borderColor: "var(--divider)" }} title={user?.email || ""}>{user?.email || "Signed in"}</span><button onClick={handleSignOut} className="min-h-[36px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Sign out</button></div>
             <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="flex min-h-[44px] items-center gap-2">
               <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>
               {profile.name ? <span className="hidden max-w-[120px] truncate text-sm font-medium sm:inline">{profile.name}</span> : null}
@@ -1094,7 +1174,20 @@ export default function App() {
               );
             })}
           </div>
-          <footer className="px-4 py-6 text-xs sm:px-2" style={{ color: "var(--muted)" }}>{counts.total} contacts • Data saved in this browser</footer>
+          <footer className="px-4 py-6 text-xs sm:px-2" style={{ color: "var(--muted)" }}>{counts.total} contacts • Data saved to your private account • {user?.email || ""}</footer>
+          <div className="px-4 py-3 text-xs sm:px-2" style={{ color: "var(--muted)" }}>
+            Signed in as {user?.email} • <button onClick={handleSignOut} className="underline underline-offset-4" style={{ color: "var(--brand)" }}>Sign out</button> • <button onClick={() => setShowDeleteAll(true)} className="underline underline-offset-4" style={{ color: "#DB200D" }}>Delete all my data</button>
+          </div>
+          {showDeleteAll && (
+            <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Delete all my data">
+              <button aria-label="Close" onClick={() => setShowDeleteAll(false)} className="absolute inset-0 bg-black/35" />
+              <div className="relative w-full max-w-[460px] rounded-t-[16px] p-6 sm:rounded-[16px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+                <h2 className="text-[22px] font-semibold">Delete all my data?</h2>
+                <p className="mt-2 leading-relaxed" style={{ color: "var(--muted)" }}>This will permanently delete all your contacts, notes, templates and settings from your account. This cannot be undone. Your login account will remain, but with no data.</p>
+                <div className="mt-6 flex gap-2"><button onClick={() => setShowDeleteAll(false)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button onClick={handleDeleteAllMyData} disabled={deleteAllBusy} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{deleteAllBusy ? "Deleting…" : "Delete everything"}</button></div>
+              </div>
+            </div>
+          )}
         </section>
         {isDesktop && (
           <aside aria-label="Contact details" className="relative sticky flex shrink-0 flex-col border-l" style={{ top: "calc(var(--safe-area-inset-top) + 69px)", height: "calc(100vh - var(--safe-area-inset-top) - 69px)", width: minimized ? 56 : panelWidth, borderColor: "var(--divider)", background: "var(--bg)" }}>
