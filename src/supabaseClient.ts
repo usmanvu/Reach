@@ -5,6 +5,11 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undef
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey)
 
-export const supabase = isSupabaseConfigured
-  ? createClient(supabaseUrl as string, supabaseAnonKey as string)
-  : null
+// Always return a client so TypeScript never sees `null`.
+// If env vars are missing we use placeholder values — the UI
+// uses isSupabaseConfigured to show the "not configured" banner,
+// and Supabase calls will fail gracefully instead of breaking the build.
+export const supabase = createClient(
+  supabaseUrl ?? 'https://placeholder.supabase.co',
+  supabaseAnonKey ?? 'placeholder-anon-key'
+)

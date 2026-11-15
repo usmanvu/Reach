@@ -132,10 +132,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!supabase || !user) return
+    if (!user) return
+    const db = supabase
     const load = async () => {
       setLoading(true)
-      const { data, error } = await supabase
+      const { data, error } = await db
         .from('contacts')
         .select('*')
         .eq('user_id', user.id)
