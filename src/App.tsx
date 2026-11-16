@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
-import { Search, Plus, Download, Pencil, Trash2, X, Minus, ExternalLink, Copy, Check, ChevronDown, ChevronUp, GripVertical, AlertTriangle, Sun, Moon, Monitor, Home, Target, FileText, Camera, Link2, Users, AtSign } from "lucide-react";
+import { Search, Plus, Download, Pencil, Trash2, X, Minus, ExternalLink, Copy, Check, ChevronDown, ChevronUp, GripVertical, AlertTriangle, Sun, Moon, Monitor, Home, Target, FileText, Camera, Link2, Users, AtSign, LayoutGrid } from "lucide-react";
 
 type ContactValue = { name: string; channel: string; outreachDate: string; contactDetails: string; link: string; replied: boolean; followedUp: boolean; notes: string; createdAt: string; updatedAt: string; };
 type Contact = { id: string; value: ContactValue };
@@ -1360,18 +1360,24 @@ export default function App() {
             <button onClick={() => changeTheme(themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system")} aria-label={`Theme: ${themeMode}. Tap to change theme.`} title={`Theme: ${themeMode}`} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[12px] border" style={{ borderColor: "var(--divider)" }}>
               {themeMode === "dark" ? <Moon size={17} /> : themeMode === "light" ? <Sun size={17} /> : <Monitor size={17} />}
             </button>
-            <button onClick={exportCSV} className="hidden min-h-[44px] items-center gap-2 rounded-[12px] border px-3.5 text-sm font-medium sm:flex" style={{ borderColor: "var(--divider)" }}><Download size={16} /><span className="hidden lg:inline">Export</span></button>
-            <button onClick={() => openAdd()} className="hidden min-h-[44px] items-center gap-2 rounded-[12px] px-4 text-sm font-medium text-white sm:flex" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
-            <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="flex min-h-[44px] items-center gap-2">
-              {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>}
-              {profile.name ? <span className="hidden max-w-[120px] truncate text-sm font-medium md:inline">{profile.name}</span> : null}
-            </button>
+            <button onClick={exportCSV} className="hidden min-h-[44px] items-center gap-2 rounded-[12px] border px-3.5 text-sm font-medium lg:flex" style={{ borderColor: "var(--divider)" }}><Download size={16} /><span>Export</span></button>
+            <button onClick={() => openAdd()} className="hidden min-h-[44px] items-center gap-2 rounded-[12px] px-4 text-sm font-medium text-white lg:flex" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
+            {isDesktop ? (
+              <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="flex min-h-[44px] items-center gap-2">
+                {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>}
+                {profile.name ? <span className="hidden max-w-[120px] truncate text-sm font-medium md:inline">{profile.name}</span> : null}
+              </button>
+            ) : (
+              <span className="flex min-h-[44px] items-center" aria-hidden="true">
+                {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }}>{headerInitials}</span>}
+              </span>
+            )}
           </div>
         </div>
       </header>
 
       <main className="flex w-full max-w-none items-stretch px-4 sm:px-6 lg:px-8">
-        <section className="flex min-w-0 flex-1 flex-col py-6" style={{ minHeight: "calc(100vh - 69px)", paddingBottom: isMobile ? 110 : undefined }}>
+        <section className="flex min-w-0 flex-1 flex-col py-6" style={{ minHeight: "calc(100vh - 69px)", paddingBottom: !isDesktop ? 110 : undefined }}>
           <div className="px-0 pt-5 lg:pt-0">
             <p className="small-caps" style={{ color: "var(--muted)" }}>Your outreach</p>
             <h1 className="mt-2 text-[34px] font-semibold leading-[1.02] tracking-[-0.025em] sm:text-[clamp(30px,4vw,44px)]">Every conversation,<br /> held with care.</h1>
@@ -1380,24 +1386,19 @@ export default function App() {
           {!isDesktop && (
             <div className="mt-6 px-0">
               <div className="rounded-[16px] border" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-                <button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+                <button onClick={() => { setPanelOpen(true); setMinimized(false); setSelectedId(null); setActiveTemplateId(null); }} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
                   <span className="small-caps" style={{ color: "var(--muted)" }}>Overview</span>
                   <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>Open overview →</span>
                 </button>
                 <div className="grid grid-cols-3 border-t" style={{ borderColor: "var(--divider)" }}>
-                  {([{ kind: "today", label: "Today", value: counts.outreachToday }, { kind: "needs-follow-up", label: "Needs follow-up", value: counts.needsFollowUp }, { kind: "replied", label: "Replied", value: counts.replied }] as const).map((row, i) => (
-                    <button key={row.kind} onClick={() => applyFocus(row.kind)} aria-label={`Show ${row.label}: ${row.value}`} className={`min-h-[64px] px-1 py-3 text-center ${i > 0 ? "border-l" : ""}`} style={{ borderColor: "var(--divider)" }}>
+                  {([{ label: "Today", value: counts.outreachToday }, { label: "Needs follow-up", value: counts.needsFollowUp }, { label: "Replied", value: counts.replied }] as const).map((row, i) => (
+                    <div key={row.label} className={`min-h-[64px] px-1 py-3 text-center ${i > 0 ? "border-l" : ""}`} style={{ borderColor: "var(--divider)" }}>
                       <span className="block text-[22px] font-semibold leading-none tracking-[-0.01em]">{row.value}</span>
                       <span className="small-caps mt-1.5 block leading-tight" style={{ color: "var(--muted)" }}>{row.label}</span>
-                    </button>
+                    </div>
                   ))}
                 </div>
                 <p className="truncate px-4 pb-3 pt-3 text-[13px] leading-relaxed" title={focusLine} style={{ color: "var(--muted)" }}>{focusLine}</p>
-                <div className="flex flex-wrap gap-2 border-t px-4 py-3" style={{ borderColor: "var(--divider)" }}>
-                  <button onClick={() => applyFocus("needs-follow-up")} className="min-h-[36px] rounded-full border px-3.5 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>Focus: Follow up</button>
-                  <button onClick={() => { setPanelOpen(true); setMinimized(false); setActiveTemplateId(templates[0]?.id || null); }} className="min-h-[36px] rounded-full border px-3.5 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>Templates</button>
-                  <button onClick={exportCSV} className="min-h-[36px] rounded-full border px-3.5 text-xs font-medium sm:hidden" style={{ borderColor: "var(--divider)" }}>Export</button>
-                </div>
               </div>
             </div>
           )}
@@ -1504,22 +1505,18 @@ export default function App() {
         )}
       </main>
 
-      {isMobile && !settingsOpen && !modal && !deleteTarget && !showDeleteAll && (
-        <nav aria-label="Mobile navigation" className="fixed bottom-4 left-1/2 z-40 flex w-[calc(100vw-32px)] max-w-[400px] -translate-x-1/2 items-center justify-between rounded-full border px-2 py-2" style={{ background: "var(--surface)", borderColor: "var(--divider)", boxShadow: "var(--shadow)" }}>
-          <button onClick={() => { setFilter("all"); setActiveFocus(null); setPanelOpen(false); window.scrollTo({ top: 0, behavior: "smooth" }); }} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5">
+      {!isDesktop && !settingsOpen && !modal && !deleteTarget && !showDeleteAll && (
+        <nav aria-label="Navigation" className="fixed bottom-4 left-1/2 z-40 flex w-[calc(100vw-32px)] max-w-[420px] -translate-x-1/2 items-center justify-between rounded-full border px-2 py-2" style={{ background: "var(--surface)", borderColor: "var(--divider)", boxShadow: "var(--shadow)" }}>
+          <button onClick={() => { setFilter("all"); setActiveFocus(null); setPanelOpen(false); setSelectedId(null); window.scrollTo({ top: 0, behavior: "smooth" }); }} aria-current={!panelOpen ? "page" : undefined} className="flex min-w-[72px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={!panelOpen ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>
             <Home size={20} />
-            <span className="text-[11px] font-medium">Home</span>
+            <span className="text-[11px] font-medium">Contacts</span>
           </button>
-          <button onClick={() => applyFocus("needs-follow-up")} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
-            <Target size={20} />
-            <span className="text-[11px] font-medium">Focus</span>
+          <button onClick={() => { setPanelOpen(true); setMinimized(false); setSelectedId(null); setActiveTemplateId(null); }} aria-current={panelOpen && !selected ? "page" : undefined} className="flex min-w-[72px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={panelOpen && !selected ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>
+            <LayoutGrid size={20} />
+            <span className="text-[11px] font-medium">Overview</span>
           </button>
           <button onClick={() => openAdd()} aria-label="Add contact" className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}><Plus size={24} /></button>
-          <button onClick={() => { setPanelOpen(true); setMinimized(false); setActiveTemplateId(templates[0]?.id || null); }} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
-            <FileText size={20} />
-            <span className="text-[11px] font-medium">Templates</span>
-          </button>
-          <button onClick={() => openSettings("profile")} aria-label="Open settings" className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
+          <button onClick={() => openSettings("profile")} aria-label="Open settings" className="flex min-w-[72px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
             {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[24px] w-[24px] rounded-full object-cover" /> : <span className="flex h-[24px] w-[24px] items-center justify-center rounded-full text-[11px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }}>{headerInitials}</span>}
             <span className="text-[11px] font-medium">You</span>
           </button>
@@ -1527,8 +1524,8 @@ export default function App() {
       )}
 
       {isTablet && panelOpen && !minimized && (
-        <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" aria-label="Contact details">
-          <button aria-label="Close details" onClick={closePanel} className="absolute inset-0 bg-black/30" />
+        <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" aria-label={selected ? "Contact details" : "Overview"}>
+          <button aria-label={selected ? "Close details" : "Close overview"} onClick={closePanel} className="absolute inset-0 bg-black/30" />
           <aside className="animate-fade relative flex w-[min(520px,92vw)] flex-col" style={{ background: "var(--surface)" }}>{panelHeader}{selected ? <div key={selected.id} className="animate-swap flex min-h-0 flex-1 flex-col">{panelContent}</div> : <div className="flex min-h-0 flex-1 flex-col">{emptyPanel}</div>}</aside>
         </div>
       )}
@@ -1546,7 +1543,7 @@ export default function App() {
       )}
 
       {(isMobile || isTablet) && panelOpen && minimized && selected && (
-        <button onClick={() => setMinimized(false)} className="fixed bottom-24 left-4 right-4 z-40 flex min-h-[52px] items-center justify-between rounded-[14px] border px-4 text-left shadow-lg sm:bottom-4" style={{ background: "var(--surface)", borderColor: "var(--divider)" }}>
+        <button onClick={() => setMinimized(false)} className="fixed bottom-24 left-4 right-4 z-40 flex min-h-[52px] items-center justify-between rounded-[14px] border px-4 text-left shadow-lg" style={{ background: "var(--surface)", borderColor: "var(--divider)" }}>
           <span className="min-w-0"><span className="small-caps block" style={{ color: "var(--muted)" }}>Minimized</span><span className="block truncate font-medium">{selected.value.name}</span></span><span className="flex items-center gap-1 text-sm font-medium" style={{ color: "var(--brand)" }}><ChevronUp size={17} /> Expand</span>
         </button>
       )}
