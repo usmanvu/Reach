@@ -433,6 +433,20 @@ export default function App() {
   const [authSent, setAuthSent] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
+  const [authTab, setAuthTab] = useState<"signin" | "signup">("signin");
+  const [authMethod, setAuthMethod] = useState<"password" | "magic">("password");
+  const [authName, setAuthName] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
+  const [authShowPassword, setAuthShowPassword] = useState(false);
+  const [authShowConfirm, setAuthShowConfirm] = useState(false);
+  const [authAgree, setAuthAgree] = useState(false);
+  const [authForgotMode, setAuthForgotMode] = useState(false);
+  const [authForgotSent, setAuthForgotSent] = useState(false);
+  const [authNeedsConfirm, setAuthNeedsConfirm] = useState(false);
+  const [authRecoveryMode, setAuthRecoveryMode] = useState(false);
+  const [authNewPassword, setAuthNewPassword] = useState("");
+  const [authNewConfirm, setAuthNewConfirm] = useState("");
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteAllBusy, setDeleteAllBusy] = useState(false);
   const isMobile = useMedia("(max-width: 767px)");
@@ -463,23 +477,101 @@ export default function App() {
   useEffect(() => {
     if (!isSupabaseConfigured) { setAuthLoading(false); return; }
     supabase.auth.getSession().then(({ data }) => { setUser(data.session?.user ?? null); setAuthLoading(false); });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { setUser(session?.user ?? null); setAuthLoading(false); });
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => { setUser(session?.user ?? null); setAuthLoading(false); if (event === "PASSWORD_RECOVERY") setAuthRecoveryMode(true); });
     return () => listener.subscription.unsubscribe();
   }, []);
 
+  const friendlyAuthError = (msg: string) => {
+    const m = (msg || "").toLowerCase();
+    if (m.includes("invalid login credentials") || m.includes("invalid email or password")) return "Incorrect email or password. Try again, or use Forgot password.";
+    if (m.includes("user already registered") || m.includes("already registered") || m.includes("already exists")) return "This email already has an account. Switch to Sign in.";
+    if (m.includes("password should be at least")) return "Password must be at least 8 characters.";
+    if (m.includes("email link is invalid") || m.includes("expired")) return "That link expired or was already used. Request a new one.";
+    if (m.includes("provider is not enabled") || m.includes("unsupported provider")) return "This provider is not enabled yet in Supabase. Enable it in Authentication > Providers, then try again.";
+    if (m.includes("too many requests") || m.includes("rate limit") || m.includes("email rate limit")) return "Too many attempts. Wait a few minutes, then try again.";
+    if (m.includes("email not confirmed")) return "Check your inbox to confirm your email first, then sign in.";
+    return msg;
+  };
+  const passwordScore = (pw: string) => {
+    let s = 0;
+    if (pw.length >= 8) s++;
+    if (pw.length >= 12) s++;
+    if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) s++;
+    if (/\d/.test(pw)) s++;
+    if (/[^A-Za-z0-9]/.test(pw)) s++;
+    return s;
+  };
+  const passwordLabel = (pw: string) => {
+    if (!pw) return "";
+    const s = passwordScore(pw);
+    if (s <= 1) return "Weak";
+    if (s <= 3) return "Medium";
+    return "Strong";
+  };
   const handleSendMagicLink = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; }
     setAuthBusy(true); setAuthError(null);
     const { error } = await supabase.auth.signInWithOtp({ email: authEmail.trim(), options: { emailRedirectTo: window.location.origin } });
     setAuthBusy(false);
-    if (error) { setAuthError(error.message); return; }
+    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
     setAuthSent(true);
   };
-  const handleGoogleSignIn = async () => {
+  const handleOAuth = async (provider: "google" | "github" | "apple") => {
     setAuthBusy(true); setAuthError(null);
-    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin, queryParams: { access_type: "offline", prompt: "consent" } } });
-    if (error) { setAuthError(error.message); setAuthBusy(false); }
+    const { error } = await supabase.auth.signInWithOAuth({ provider, options: { redirectTo: window.location.origin, queryParams: provider === "google" ? { access_type: "offline", prompt: "consent" } : undefined } });
+    if (error) { setAuthError(friendlyAuthError(error.message)); setAuthBusy(false); }
+  };
+  const handleGoogleSignIn = async () => handleOAuth("google");
+  const handleSignUpPassword = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!authName.trim()) { setAuthError("Please enter your name."); return; }
+    if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; }
+    if (authPassword.length < 8) { setAuthError("Password must be at least 8 characters."); return; }
+    if (authPassword !== authConfirmPassword) { setAuthError("Passwords do not match."); return; }
+    if (!authAgree) { setAuthError("Please accept the terms to create your account."); return; }
+    setAuthBusy(true); setAuthError(null);
+    const { data, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword, options: { data: { full_name: authName.trim() }, emailRedirectTo: window.location.origin } });
+    setAuthBusy(false);
+    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
+    if (data.user && !data.session) { setAuthNeedsConfirm(true); return; }
+    setAuthNeedsConfirm(false);
+  };
+  const handleSignInPassword = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; }
+    if (!authPassword) { setAuthError("Please enter your password."); return; }
+    setAuthBusy(true); setAuthError(null);
+    const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+    setAuthBusy(false);
+    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
+  };
+  const handleForgotPassword = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email to reset your password."); return; }
+    setAuthBusy(true); setAuthError(null);
+    const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), { redirectTo: window.location.origin });
+    setAuthBusy(false);
+    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
+    setAuthForgotSent(true);
+  };
+  const handleUpdatePasswordRecovery = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (authNewPassword.length < 8) { setAuthError("Password must be at least 8 characters."); return; }
+    if (authNewPassword !== authNewConfirm) { setAuthError("Passwords do not match."); return; }
+    setAuthBusy(true); setAuthError(null);
+    const { error } = await supabase.auth.updateUser({ password: authNewPassword });
+    setAuthBusy(false);
+    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
+    setAuthRecoveryMode(false); setAuthNewPassword(""); setAuthNewConfirm(""); showToast("Password updated");
+  };
+  const handleResendConfirm = async () => {
+    if (!authEmail.trim()) return;
+    setAuthBusy(true); setAuthError(null);
+    const { error } = await supabase.auth.resend({ type: "signup", email: authEmail.trim() });
+    setAuthBusy(false);
+    if (error) setAuthError(friendlyAuthError(error.message));
+    else setAuthError(null);
   };
   const handleSignOut = async () => { setSettingsOpen(false); await supabase.auth.signOut(); setContacts([]); setSelectedId(null); setPanelOpen(false); };
   const handleDeleteAllMyData = async () => {
@@ -523,7 +615,9 @@ export default function App() {
           if (Array.isArray(first.value.templates) && first.value.templates.length > 0) { setTemplates(first.value.templates); templatesRef.current = first.value.templates; }
           if (first.value.profile && typeof first.value.profile === "object") {
             const rawSocials = (first.value.profile as { socials?: unknown; socialLinks?: unknown }).socials ?? (first.value.profile as { socials?: unknown; socialLinks?: unknown }).socialLinks
-            const p: ProfileValue = { name: typeof first.value.profile.name === "string" ? first.value.profile.name : "", socials: normalizeSocials(rawSocials), avatarUrl: typeof (first.value.profile as { avatarUrl?: unknown }).avatarUrl === "string" ? (first.value.profile as { avatarUrl: string }).avatarUrl : "" };
+            const savedName = typeof first.value.profile.name === "string" ? first.value.profile.name : "";
+            const metaName = typeof (user as { user_metadata?: { full_name?: unknown } } | null)?.user_metadata?.full_name === "string" ? (user as { user_metadata: { full_name: string } }).user_metadata.full_name : "";
+            const p: ProfileValue = { name: savedName || metaName || "", socials: normalizeSocials(rawSocials), avatarUrl: typeof (first.value.profile as { avatarUrl?: unknown }).avatarUrl === "string" ? (first.value.profile as { avatarUrl: string }).avatarUrl : "" };
             setProfile(p); profileRef.current = p; setProfileDraft(p);
           }
           if (first.value.shortcuts && typeof first.value.shortcuts === "object") {
@@ -1099,46 +1193,158 @@ export default function App() {
     );
   }
   if (!user) {
+    const pwScore = passwordScore(authPassword);
+    const pwLabel = passwordLabel(authPassword);
+    const pwColor = pwScore <= 1 ? "#DB200D" : pwScore <= 3 ? "#E6A800" : "#1A9A4A";
     return (
       <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="flex items-center justify-center px-4 py-10">
-        <div className="w-full max-w-[440px]">
+        <div className="w-full max-w-[480px]">
           <div className="text-center">
             <span className="mx-auto block h-[10px] w-[10px] rounded-[2px]" style={{ background: "#DB200D" }} />
             <h1 className="mt-4 text-[34px] font-semibold tracking-[-0.02em]">Reach</h1>
             <p className="mt-1 text-[15px]" style={{ color: "var(--muted)" }}>Outreach, curated. Your data, only yours.</p>
           </div>
           <div className="mt-8 rounded-[16px] border p-6" style={{ borderColor: "var(--divider)", background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <p className="small-caps" style={{ color: "var(--muted)" }}>Sign in</p>
-            <h2 className="mt-2 text-[22px] font-semibold">Your outreach follows you</h2>
-            <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Continue with Google, or with an email magic link. No password to remember. Each account sees only its own contacts.</p>
-            <button onClick={handleGoogleSignIn} disabled={authBusy} className="mt-5 flex min-h-[48px] w-full items-center justify-center gap-2.5 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)", background: "var(--bg)" }}>
-              <span aria-hidden="true" className="flex h-[18px] w-[18px] items-center justify-center rounded-full text-[13px] font-bold" style={{ background: "#fff", color: "#1a73e8", border: "1px solid var(--divider)" }}>G</span>
-              {authBusy ? "Opening Google…" : "Continue with Google"}
-            </button>
-            {authError && <p role="alert" className="mt-3 text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
-            <div className="mt-5 flex items-center gap-3" aria-hidden="true"><span className="h-px flex-1" style={{ background: "var(--divider)" }} /><span className="text-xs" style={{ color: "var(--muted)" }}>or with email</span><span className="h-px flex-1" style={{ background: "var(--divider)" }} /></div>
-            {authSent ? (
-              <div className="mt-5 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}>
-                <p className="font-medium">Check your inbox</p>
-                <p className="mt-1 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>We sent a sign-in link to <b style={{ color: "var(--text)" }}>{authEmail}</b>. Open it on this device. It expires in 1 hour.</p>
-                <button onClick={() => setAuthSent(false)} className="mt-3 text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Use a different email</button>
+            <div className="flex gap-1 rounded-full border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="tablist" aria-label="Sign in or create account">
+              {(["signin", "signup"] as const).map(tab => (
+                <button key={tab} role="tab" aria-selected={authTab === tab} onClick={() => { setAuthTab(tab); setAuthError(null); setAuthForgotMode(false); setAuthForgotSent(false); setAuthNeedsConfirm(false); setAuthSent(false); }} className="min-h-[40px] flex-1 rounded-full px-4 text-sm font-medium" style={authTab === tab ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{tab === "signin" ? "Sign in" : "Create account"}</button>
+              ))}
+            </div>
+            {authNeedsConfirm ? (
+              <div className="mt-6">
+                <h2 className="text-[22px] font-semibold">Check your inbox</h2>
+                <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>We sent a confirmation link to <b style={{ color: "var(--text)" }}>{authEmail}</b>. Click it, then come back and sign in. It expires in 1 hour.</p>
+                <div className="mt-5 flex gap-2">
+                  <button onClick={handleResendConfirm} disabled={authBusy} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)" }}>{authBusy ? "Sending…" : "Resend email"}</button>
+                  <button onClick={() => { setAuthNeedsConfirm(false); setAuthTab("signin"); setAuthMethod("password"); }} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white" style={{ background: "#DB200D" }}>Back to sign in</button>
+                </div>
+                {authError && <p role="alert" className="mt-3 text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
+              </div>
+            ) : authForgotMode ? (
+              <div className="mt-6">
+                <h2 className="text-[22px] font-semibold">Reset your password</h2>
+                {authForgotSent ? (
+                  <div className="mt-3 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}>
+                    <p className="font-medium">Check your inbox</p>
+                    <p className="mt-1 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>If an account exists for <b style={{ color: "var(--text)" }}>{authEmail}</b>, we sent a reset link. It expires in 1 hour.</p>
+                    <button onClick={() => { setAuthForgotMode(false); setAuthForgotSent(false); setAuthTab("signin"); }} className="mt-3 text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Back to sign in</button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleForgotPassword} className="mt-5 space-y-3">
+                    <p className="text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Enter the email you signed up with. We will send you a link to set a new password.</p>
+                    <label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label>
+                    <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" required autoComplete="email" className="h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
+                    {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
+                    <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Sending…" : "Send reset link"}</button>
+                    <button type="button" onClick={() => { setAuthForgotMode(false); setAuthError(null); }} className="min-h-[40px] w-full text-sm font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Back to sign in</button>
+                  </form>
+                )}
+              </div>
+            ) : authSent ? (
+              <div className="mt-6">
+                <h2 className="text-[22px] font-semibold">Check your inbox</h2>
+                <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>We sent a sign-in link to <b style={{ color: "var(--text)" }}>{authEmail}</b>. Open it on this device. It expires in 1 hour.</p>
+                <button onClick={() => { setAuthSent(false); setAuthError(null); }} className="mt-4 text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Use a different email</button>
               </div>
             ) : (
-              <form onSubmit={handleSendMagicLink} className="mt-5 space-y-3">
-                <label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label>
-                <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="you@example.com" required className="h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-                {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
-                <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Sending…" : "Send magic link"}</button>
-                <p className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>By signing in you agree your contacts are stored privately under your account. You can export or delete all your data anytime from Settings.</p>
-              </form>
+              <>
+                <h2 className="mt-5 text-[22px] font-semibold">{authTab === "signin" ? "Welcome back" : "Create your account"}</h2>
+                <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>{authTab === "signin" ? "Sign in to see your outreach. Each account sees only its own contacts." : "One account for all your outreach. Same email = same contacts, no matter how you sign in."}</p>
+                <div className="mt-5 space-y-2">
+                  <button onClick={() => handleOAuth("google")} disabled={authBusy} className="flex min-h-[48px] w-full items-center justify-center gap-2.5 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)", background: "#fff", color: "#1f1f1f" }}>
+                    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 48 48" style={{ flexShrink: 0 }}>
+                      <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.5 6.1 29.5 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.7-.4-3.9z" />
+                      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 18.9 12 24 12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.5 6.1 29.5 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+                      <path fill="#4CAF50" d="M24 44c5.4 0 10.3-2.1 14-5.5l-6.4-5.4C29.6 34.8 26.9 36 24 36c-5.1 0-9.5-3.2-11.1-7.8l-6.8 5.3C9.6 39.7 16.3 44 24 44z" />
+                      <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.3-2.4 4.3-4.7 5.5l6.4 5.4C39.9 35.6 44 30.4 44 24c0-1.3-.1-2.7-.4-3.9z" />
+                    </svg>
+                    Continue with Google
+                  </button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => handleOAuth("github")} disabled={authBusy} className="flex min-h-[48px] items-center justify-center gap-2 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)", background: "var(--bg)", color: "var(--text)" }}>
+                      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }}><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.74.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.68.8.56A10.52 10.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z" /></svg>
+                      GitHub
+                    </button>
+                    <button onClick={() => handleOAuth("apple")} disabled={authBusy} className="flex min-h-[48px] items-center justify-center gap-2 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)", background: "var(--bg)", color: "var(--text)" }}>
+                      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }}><path d="M16.36 12.94c.01 2.1 1.84 2.8 1.87 2.81-.02.05-.29.99-1.04 1.96-.63.92-1.28 1.84-2.3 1.86-1 .02-1.32-.61-2.46-.6-1.14.01-1.5.6-2.45.62-1.02.02-1.8-.99-2.43-1.91-1.33-1.91-2.34-5.4-.95-7.76.68-1.15 1.9-1.88 3.22-1.9.99-.02 1.93.67 2.54.67.6 0 1.73-.83 2.92-.71.5.02 1.9.2 2.8 1.5-.07.05-1.67.98-1.65 2.91zM14.5 8.36c.52-.63.87-1.5.77-2.36-1.15.05-2.54.77-3.36 1.74-.74.86-1.39 2.23-1.22 3.55 1.04.08 2.1-.53 2.81-1.4z" /></svg>
+                      Apple
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-5 flex items-center gap-3" aria-hidden="true"><span className="h-px flex-1" style={{ background: "var(--divider)" }} /><span className="text-xs" style={{ color: "var(--muted)" }}>or with email</span><span className="h-px flex-1" style={{ background: "var(--divider)" }} /></div>
+                <div className="mt-4 flex gap-1 rounded-full border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="group" aria-label="Email sign-in method">
+                  {(["password", "magic"] as const).map(m => (
+                    <button key={m} onClick={() => { setAuthMethod(m); setAuthError(null); }} aria-pressed={authMethod === m} className="min-h-[36px] flex-1 rounded-full px-3 text-xs font-medium" style={authMethod === m ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{m === "password" ? "Password" : "Magic link"}</button>
+                  ))}
+                </div>
+                {authMethod === "magic" ? (
+                  <form onSubmit={handleSendMagicLink} className="mt-5 space-y-3">
+                    <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label><input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" required autoComplete="email" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+                    {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
+                    <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Sending…" : "Send magic link"}</button>
+                    <p className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>We send a one-time link. It expires in 1 hour and works once. Open it on this device.</p>
+                  </form>
+                ) : authTab === "signup" ? (
+                  <form onSubmit={handleSignUpPassword} className="mt-5 space-y-3">
+                    <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Full name</label><input type="text" value={authName} onChange={e => setAuthName(e.target.value)} placeholder="Memik Luqman" required autoComplete="name" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+                    <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label><input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" required autoComplete="email" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+                    <div>
+                      <label className="small-caps block" style={{ color: "var(--muted)" }}>Password</label>
+                      <div className="relative mt-2"><input type={authShowPassword ? "text" : "password"} value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="At least 8 characters" required autoComplete="new-password" minLength={8} className="h-[48px] w-full rounded-[12px] border px-3.5 pr-16 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><button type="button" onClick={() => setAuthShowPassword(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[32px] px-2 text-xs font-medium" style={{ color: "var(--muted)" }}>{authShowPassword ? "Hide" : "Show"}</button></div>
+                      {authPassword && (
+                        <div className="mt-2">
+                          <div className="h-[4px] w-full overflow-hidden rounded-full" style={{ background: "var(--divider)" }}><div className="h-full transition-all" style={{ width: `${Math.min(100, (pwScore / 5) * 100)}%`, background: pwColor }} /></div>
+                          <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>Strength: <b style={{ color: pwColor }}>{pwLabel}</b> • Use 8+ characters with letters, a number, and a symbol.</p>
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="small-caps block" style={{ color: "var(--muted)" }}>Confirm password</label>
+                      <div className="relative mt-2"><input type={authShowConfirm ? "text" : "password"} value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)} placeholder="Repeat password" required autoComplete="new-password" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 pr-16 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><button type="button" onClick={() => setAuthShowConfirm(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[32px] px-2 text-xs font-medium" style={{ color: "var(--muted)" }}>{authShowConfirm ? "Hide" : "Show"}</button></div>
+                      {authConfirmPassword && authPassword !== authConfirmPassword && <p className="mt-1 text-xs font-medium" style={{ color: "#DB200D" }}>Passwords do not match.</p>}
+                    </div>
+                    <label className="flex items-start gap-2 pt-1 text-xs leading-relaxed" style={{ color: "var(--muted)" }}><input type="checkbox" checked={authAgree} onChange={e => setAuthAgree(e.target.checked)} className="mt-0.5 h-[16px] w-[16px] shrink-0" />I agree to the terms and understand my contacts are stored privately under my account. I can export or delete all my data anytime.</label>
+                    {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
+                    <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Creating…" : "Create account"}</button>
+                    <p className="text-center text-xs" style={{ color: "var(--muted)" }}>Already have an account? <button type="button" onClick={() => { setAuthTab("signin"); setAuthError(null); }} className="font-medium underline underline-offset-4" style={{ color: "var(--text)" }}>Sign in</button></p>
+                  </form>
+                ) : (
+                  <form onSubmit={handleSignInPassword} className="mt-5 space-y-3">
+                    <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label><input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" required autoComplete="email" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+                    <div>
+                      <div className="flex items-center justify-between"><label className="small-caps block" style={{ color: "var(--muted)" }}>Password</label><button type="button" onClick={() => { setAuthForgotMode(true); setAuthForgotSent(false); setAuthError(null); }} className="text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Forgot password?</button></div>
+                      <div className="relative mt-2"><input type={authShowPassword ? "text" : "password"} value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="Your password" required autoComplete="current-password" className="h-[48px] w-full rounded-[12px] border px-3.5 pr-16 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><button type="button" onClick={() => setAuthShowPassword(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[32px] px-2 text-xs font-medium" style={{ color: "var(--muted)" }}>{authShowPassword ? "Hide" : "Show"}</button></div>
+                    </div>
+                    {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
+                    <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Signing in…" : "Sign in"}</button>
+                    <p className="text-center text-xs" style={{ color: "var(--muted)" }}>No account yet? <button type="button" onClick={() => { setAuthTab("signup"); setAuthError(null); }} className="font-medium underline underline-offset-4" style={{ color: "var(--text)" }}>Create account</button></p>
+                  </form>
+                )}
+              </>
             )}
           </div>
-          <p className="mt-4 text-center text-xs" style={{ color: "var(--muted)" }}>Data saved in Supabase • Row Level Security • You own your data</p>
+          <p className="mt-4 text-center text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Data saved in Supabase • Row Level Security • You own your data • Same email = same contacts, no matter how you sign in.</p>
         </div>
       </div>
     );
   }
 
+  if (user && authRecoveryMode) {
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="flex items-center justify-center px-4 py-10">
+        <div className="w-full max-w-[440px]">
+          <div className="text-center"><span className="mx-auto block h-[10px] w-[10px] rounded-[2px]" style={{ background: "#DB200D" }} /><h1 className="mt-4 text-[28px] font-semibold">Set a new password</h1><p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>You came from a reset link for {user.email}.</p></div>
+          <form onSubmit={handleUpdatePasswordRecovery} className="mt-8 space-y-3 rounded-[16px] border p-6" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
+            <div><label className="small-caps block" style={{ color: "var(--muted)" }}>New password</label><input type={authShowPassword ? "text" : "password"} value={authNewPassword} onChange={e => setAuthNewPassword(e.target.value)} placeholder="At least 8 characters" required minLength={8} autoComplete="new-password" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+            <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Confirm new password</label><input type={authShowConfirm ? "text" : "password"} value={authNewConfirm} onChange={e => setAuthNewConfirm(e.target.value)} placeholder="Repeat password" required autoComplete="new-password" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+            {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
+            <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Saving…" : "Save new password"}</button>
+            <button type="button" onClick={() => setAuthRecoveryMode(false)} className="min-h-[40px] w-full text-sm font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Skip for now</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
   return (
     <div data-safe-area-inset-root style={{ boxSizing: "border-box", paddingTop: "var(--safe-area-inset-top)", minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="overflow-x-clip">
       <header data-safe-area-sticky-top style={{ top: "var(--safe-area-inset-top)", background: "var(--bg)", borderColor: "var(--divider)" }} className="sticky z-30 border-b">
