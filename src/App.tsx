@@ -757,7 +757,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `reach-${todayISO()}.csv`; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 800);
-    showToast(`Exported ${contacts.length} contacts`);
+    showToast(`Exported ${contacts.length} ${contacts.length === 1 ? "contact" : "contacts"}`);
   };
 
   const copyText = (text: string, key: string) => {
@@ -1169,10 +1169,10 @@ export default function App() {
 
   const panelHeader = (
     <div className="flex shrink-0 items-center justify-between border-b px-4 py-3 sm:px-5" style={{ borderColor: "var(--divider)" }}>
-      <span className="small-caps" style={{ color: "var(--muted)" }}>Details</span>
+      <span className="small-caps" style={{ color: "var(--muted)" }}>{selected ? "Details" : "Overview"}</span>
       <div className="flex items-center gap-1">
-        <button onClick={() => setMinimized(true)} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label="Minimize details" title="Minimize"><Minus size={18} /></button>
-        <button onClick={closePanel} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label="Close details" title="Close"><X size={18} /></button>
+        <button onClick={() => setMinimized(true)} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label={selected ? "Minimize details" : "Minimize overview"} title="Minimize"><Minus size={18} /></button>
+        <button onClick={closePanel} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label={selected ? "Close details" : "Close overview"} title="Close"><X size={18} /></button>
       </div>
     </div>
   );
@@ -1433,7 +1433,7 @@ export default function App() {
               ))}
             </div>
           </div>
-          <p className="mt-4 px-4 text-sm sm:px-0" style={{ color: "var(--muted)" }} aria-live="polite">{counts.total} contacts • {counts.replied} replied • {counts.followed} followed up</p>
+          <p className="mt-4 px-4 text-sm sm:px-0" style={{ color: "var(--muted)" }} aria-live="polite">{counts.total} {counts.total === 1 ? "contact" : "contacts"} • {counts.replied} replied • {counts.followed} followed up</p>
           {activeFocus && <div className="mt-3 flex flex-wrap items-center gap-2 px-4 sm:px-0"><span className="inline-flex min-h-[32px] items-center rounded-full px-3 text-xs font-medium" style={{ background: "var(--text)", color: "var(--bg)" }}>Showing: {activeFocus}</span><button onClick={() => { setActiveFocus(null); setFilter("all"); }} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>Clear</button></div>}
           {!selected && !isMobile && <div className="mt-3 px-4 sm:px-0 lg:hidden"><button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="min-h-[40px] rounded-[10px] border px-3.5 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Today focus &amp; quick capture</button></div>}
 
@@ -1453,18 +1453,26 @@ export default function App() {
             ) : filtered.map(c => {
               const isSel = c.id === selectedId;
               const norm = displayLink(c);
+              const _daysAgo = c.value.outreachDate ? Math.floor((new Date(`${todayISO()}T12:00:00`).getTime() - new Date(`${c.value.outreachDate}T12:00:00`).getTime()) / 86400000) : -1;
+              const _isDue = !c.value.replied && _daysAgo >= 4;
+              const _isDueToday = !c.value.replied && _daysAgo === 0;
               return (
                 <article key={c.id} onClick={() => selectContact(c.id)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectContact(c.id); } }} tabIndex={0} aria-label={`Open details for ${c.value.name}`} className="relative cursor-pointer" style={{ background: isSel ? "var(--tint)" : "transparent", borderBottom: "1px solid var(--divider)", padding: "14px 20px" }}>
                   <div className="flex flex-col gap-1 lg:grid lg:items-center lg:gap-4 lg:grid-cols-[minmax(200px,1.5fr)_minmax(180px,1.1fr)_88px_76px]">
                     <div className="min-w-0">
                       <h3 className="truncate text-[16px]" style={{ lineHeight: 1.3, fontWeight: isSel ? 600 : 500 }}>{c.value.name}</h3>
                       <p className="truncate text-[13px]" style={{ color: "var(--muted)", lineHeight: 1.3 }}>{c.value.channel || "—"} <span className="mx-1">•</span> {c.value.outreachDate ? formatDate(c.value.outreachDate) : "—"}</p>
-                      {(c.value.replied || c.value.followedUp) && (
-                        <span className="mt-1 flex gap-2 lg:hidden">
-                          {c.value.replied && <span className="inline-flex items-center gap-1.5 text-xs font-medium"><span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--text)" }} />Replied</span>}
-                          {c.value.followedUp && <span className="inline-flex items-center gap-1.5 text-xs font-medium"><span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--muted)" }} />Followed up</span>}
-                        </span>
-                      )}
+                      <span className="mt-1.5 flex flex-wrap gap-1.5">
+                        {c.value.replied ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "var(--tint)", color: "var(--text)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: "#1A9A4A" }} />Replied</span>
+                        ) : c.value.followedUp ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "var(--tint)", color: "var(--text)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--brand)" }} />Followed up</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "var(--bg-soft)", color: "var(--muted)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--muted)" }} />To reach</span>
+                        )}
+                        {_isDue && <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "#FFF0EE", color: "#DB200D" }}>Follow-up due • {_daysAgo}d</span>}
+                        {_isDueToday && <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "#FFF8E1", color: "#8A6D00" }}>Due today</span>}
+                      </span>
                     </div>
                     <div className="min-w-0"><p className="truncate text-left text-sm" title={c.value.contactDetails || undefined} style={{ lineHeight: 1.3, color: c.value.contactDetails ? undefined : "var(--muted)" }}>{c.value.contactDetails || "—"}</p></div>
                     <div className="flex items-center justify-between gap-3 lg:contents">
@@ -1481,7 +1489,7 @@ export default function App() {
               );
             })}
           </div>
-          {!isMobile && <footer className="mt-auto px-4 pt-8 pb-2 text-xs sm:px-0" style={{ color: "var(--muted)" }}>{counts.total} contacts • Data saved to your private account</footer>}
+          {!isMobile && <footer className="mt-auto px-4 pt-8 pb-2 text-xs sm:px-0" style={{ color: "var(--muted)" }}>{counts.total} {counts.total === 1 ? "contact" : "contacts"} • Data saved to your private account</footer>}
           {showDeleteAll && (
             <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Delete all my data">
               <button aria-label="Close" onClick={() => setShowDeleteAll(false)} className="absolute inset-0 bg-black/35" />
@@ -1494,7 +1502,7 @@ export default function App() {
           )}
         </section>
         {isDesktop && (
-          <aside aria-label="Contact details" className="relative sticky flex shrink-0 flex-col border-l self-stretch" style={{ top: "calc(var(--safe-area-inset-top) + 69px)", minHeight: "calc(100vh - var(--safe-area-inset-top) - 69px)", width: minimized ? 56 : panelWidth, borderColor: "var(--divider)", background: "var(--bg)" }}>
+          <aside aria-label={selected ? "Contact details" : "Overview"} className="relative sticky flex shrink-0 flex-col border-l self-stretch" style={{ top: "calc(var(--safe-area-inset-top) + 69px)", minHeight: "calc(100vh - var(--safe-area-inset-top) - 69px)", width: minimized ? 56 : panelWidth, borderColor: "var(--divider)", background: "var(--bg)" }}>
             {!minimized && (
               <>
                 <div role="separator" aria-orientation="vertical" aria-label="Resize details panel" aria-valuenow={panelWidth} aria-valuemin={360} aria-valuemax={540} tabIndex={0} onKeyDown={e => { if (e.key === "ArrowLeft") setPanelWidth(w => Math.max(360, w - 20)); if (e.key === "ArrowRight") setPanelWidth(w => Math.min(540, w + 20)); }} onMouseDown={startResize} className="absolute bottom-0 left-0 top-0 z-10 flex w-[12px] -translate-x-[6px] cursor-ew-resize items-center justify-center opacity-0 hover:opacity-100 focus:opacity-100" style={{ background: "transparent" }}><span className="flex h-[44px] w-[8px] items-center justify-center rounded-full" style={{ background: "var(--divider)" }}><GripVertical size={12} style={{ color: "var(--muted)" }} /></span></div>
@@ -1509,7 +1517,7 @@ export default function App() {
             {minimized && (
               <div className="flex min-h-0 flex-1 flex-col items-center gap-4 py-4">
                 <button onClick={() => setMinimized(false)} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label="Expand details" title="Expand details"><ChevronUp size={18} className="-rotate-90" /></button>
-                <span className="small-caps" style={{ color: "var(--muted)", writingMode: "vertical-rl" }}>Details</span>
+                <span className="small-caps" style={{ color: "var(--muted)", writingMode: "vertical-rl" }}>{selected ? "Details" : "Overview"}</span>
               </div>
             )}
           </aside>
@@ -1732,7 +1740,7 @@ export default function App() {
                 <div className="mt-5 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}>
                   <p className="small-caps" style={{ color: "var(--muted)" }}>Signed in as</p>
                   <p className="mt-2 truncate text-[15px] font-medium">{user?.email || "Signed in"}</p>
-                  <p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>{counts.total} contacts • Data saved to your private account</p>
+                  <p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>{counts.total} {counts.total === 1 ? "contact" : "contacts"} • Data saved to your private account</p>
                 </div>
                 <div className="mt-4 flex flex-col gap-2">
                   <button onClick={handleSignOut} className="min-h-[46px] w-full rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Sign out</button>
@@ -1748,9 +1756,10 @@ export default function App() {
       {modal && (
         <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={modal.mode === "add" ? "Add contact" : "Edit contact"}>
           <button aria-label="Close dialog" onClick={() => !busy && setModal(null)} className="absolute inset-0 bg-black/35" />
-          <div ref={formRef} className="animate-fade relative max-h-[92vh] w-full max-w-[620px] overflow-y-auto rounded-t-[16px] p-5 sm:rounded-[16px] sm:p-6" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <div className="flex items-start justify-between gap-4"><div><p className="small-caps" style={{ color: "var(--muted)" }}>{modal.mode === "add" ? "New outreach" : "Edit contact"}</p><h2 className="mt-2 text-[24px] font-semibold">{modal.mode === "add" ? "Add contact" : `Edit ${modal.contact.value.name}`}</h2></div><button onClick={() => setModal(null)} aria-label="Close form" className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]"><X size={19} /></button></div>
-            <form className="mt-5 space-y-4" onSubmit={e => { e.preventDefault(); submitForm(); }}>
+          <div ref={formRef} className="animate-fade relative flex max-h-[88vh] w-full max-w-[620px] flex-col overflow-hidden rounded-t-[16px] sm:rounded-[16px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+            <div className="flex shrink-0 items-start justify-between gap-4 px-5 pt-4 sm:px-6 sm:pt-5"><div><p className="small-caps" style={{ color: "var(--muted)" }}>{modal.mode === "add" ? "New outreach" : "Edit contact"}</p><h2 className="mt-1 text-[20px] font-semibold leading-tight">{modal.mode === "add" ? "Add contact" : `Edit ${modal.contact.value.name}`}</h2></div><button onClick={() => setModal(null)} aria-label="Close form" className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]"><X size={19} /></button></div>
+            <form className="flex min-h-0 flex-1 flex-col" onSubmit={e => { e.preventDefault(); submitForm(); }}>
+              <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6 space-y-3">
               <div><label htmlFor="f-name" className="small-caps block" style={{ color: "var(--muted)" }}>Name *</label><input id="f-name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required placeholder="Full name or studio" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div><label htmlFor="f-channel" className="small-caps block" style={{ color: "var(--muted)" }}>Channel</label><input id="f-channel" list="channel-suggestions" value={form.channel} onChange={e => setForm({ ...form, channel: e.target.value })} placeholder="Instagram, Email, Studio…" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><datalist id="channel-suggestions"><option value="Instagram" /><option value="X (Twitter)" /><option value="TikTok" /><option value="YouTube" /><option value="LinkedIn" /><option value="Behance" /><option value="Dribbble" /><option value="Pinterest" /><option value="WhatsApp" /><option value="Telegram" /><option value="Email" /><option value="Website" /><option value="Portfolio" /><option value="Studio visit" /></datalist></div>
@@ -1763,9 +1772,12 @@ export default function App() {
                   <label key={k} className="flex min-h-[44px] cursor-pointer items-center gap-2.5 rounded-[12px] border px-3.5 text-sm font-medium" style={{ borderColor: "var(--divider)" }}><input type="checkbox" checked={form[k]} onChange={e => setForm({ ...form, [k]: e.target.checked })} className="h-[18px] w-[18px]" style={{ accentColor: "var(--text)" }} /> {k === "replied" ? "Replied" : "Followed up"}</label>
                 ))}
               </div>
-              <div><label htmlFor="f-notes" className="small-caps block" style={{ color: "var(--muted)" }}>Notes</label><textarea id="f-notes" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={4} placeholder="Context, next step…" className="mt-2 w-full resize-y rounded-[12px] border px-3.5 py-3 text-[15px] leading-relaxed" style={{ borderColor: "var(--divider)", background: "var(--input)", minHeight: 110 }} /></div>
-              {formError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{formError}</p>}
-              <div className="flex gap-2 pt-1"><button type="button" onClick={() => setModal(null)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button type="submit" disabled={busy || !form.name.trim()} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{busy ? "Saving…" : modal.mode === "add" ? "Add contact" : "Save changes"}</button></div>
+              <div><label htmlFor="f-notes" className="small-caps block" style={{ color: "var(--muted)" }}>Notes</label><textarea id="f-notes" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3} placeholder="Context, next step…" className="mt-2 w-full resize-y rounded-[12px] border px-3.5 py-3 text-[15px] leading-relaxed" style={{ borderColor: "var(--divider)", background: "var(--input)", minHeight: 84 }} /></div>
+              </div>
+              <div className="shrink-0 border-t px-5 py-3 sm:px-6" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
+                {formError && <p role="alert" className="mb-2 text-sm font-medium" style={{ color: "#DB200D" }}>{formError}</p>}
+                <div className="flex gap-2"><button type="button" onClick={() => setModal(null)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button type="submit" disabled={busy || !form.name.trim()} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{busy ? "Saving…" : modal.mode === "add" ? "Add contact" : "Save changes"}</button></div>
+              </div>
             </form>
           </div>
         </div>
