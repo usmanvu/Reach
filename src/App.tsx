@@ -476,6 +476,11 @@ export default function App() {
     if (error) { setAuthError(error.message); return; }
     setAuthSent(true);
   };
+  const handleGoogleSignIn = async () => {
+    setAuthBusy(true); setAuthError(null);
+    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin, queryParams: { access_type: "offline", prompt: "consent" } } });
+    if (error) { setAuthError(error.message); setAuthBusy(false); }
+  };
   const handleSignOut = async () => { setSettingsOpen(false); await supabase.auth.signOut(); setContacts([]); setSelectedId(null); setPanelOpen(false); };
   const handleDeleteAllMyData = async () => {
     if (!user) return; setDeleteAllBusy(true);
@@ -1105,7 +1110,13 @@ export default function App() {
           <div className="mt-8 rounded-[16px] border p-6" style={{ borderColor: "var(--divider)", background: "var(--surface)", boxShadow: "var(--shadow)" }}>
             <p className="small-caps" style={{ color: "var(--muted)" }}>Sign in</p>
             <h2 className="mt-2 text-[22px] font-semibold">Your outreach follows you</h2>
-            <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Enter your email. We will send you a magic link. No password to remember. Each account sees only its own contacts.</p>
+            <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Continue with Google, or with an email magic link. No password to remember. Each account sees only its own contacts.</p>
+            <button onClick={handleGoogleSignIn} disabled={authBusy} className="mt-5 flex min-h-[48px] w-full items-center justify-center gap-2.5 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)", background: "var(--bg)" }}>
+              <span aria-hidden="true" className="flex h-[18px] w-[18px] items-center justify-center rounded-full text-[13px] font-bold" style={{ background: "#fff", color: "#1a73e8", border: "1px solid var(--divider)" }}>G</span>
+              {authBusy ? "Opening Google…" : "Continue with Google"}
+            </button>
+            {authError && <p role="alert" className="mt-3 text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
+            <div className="mt-5 flex items-center gap-3" aria-hidden="true"><span className="h-px flex-1" style={{ background: "var(--divider)" }} /><span className="text-xs" style={{ color: "var(--muted)" }}>or with email</span><span className="h-px flex-1" style={{ background: "var(--divider)" }} /></div>
             {authSent ? (
               <div className="mt-5 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}>
                 <p className="font-medium">Check your inbox</p>
