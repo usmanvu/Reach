@@ -2,18 +2,89 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import { Search, Plus, Download, Pencil, Trash2, X, Minus, ExternalLink, Copy, Check, ChevronDown, ChevronUp, GripVertical, AlertTriangle, Sun, Moon, Monitor, Home, Target, FileText, Camera, Link2, Users, AtSign, LayoutGrid } from "lucide-react";
 
-type ContactValue = { name: string; channel: string; outreachDate: string; contactDetails: string; link: string; replied: boolean; followedUp: boolean; notes: string; createdAt: string; updatedAt: string; };
+type Stage = "to-reach" | "pitched" | "in-conversation" | "follow-up" | "won" | "paused" | "archived";
+type WorkType = "branding" | "editorial" | "social" | "collaboration" | "other" | "";
+type ContactValue = { name: string; channel: string; outreachDate: string; contactDetails: string; link: string; replied: boolean; followedUp: boolean; notes: string; createdAt: string; updatedAt: string; stage?: Stage; whyThem?: string; whatSent?: string; nextStep?: string; workType?: WorkType; followUpDate?: string; featuredLink?: string; };
 type Contact = { id: string; value: ContactValue };
 type ThemeMode = "system" | "light" | "dark";
 type Filter = "all" | "to-reach" | "replied" | "followed" | "today" | "needs-follow-up";
-type TemplateItem = { id: string; title: string; text: string };
+type TemplateItem = { id: string; title: string; text: string; workType?: WorkType; portfolioLink?: string };
 type SocialAccount = { id: string; platform: string; value: string; custom?: boolean };
-type ProfileValue = { name: string; socials: SocialAccount[]; avatarUrl?: string };
+type ProfileValue = { name: string; socials: SocialAccount[]; avatarUrl?: string; whatIDo?: string; openFor?: string; featuredLink?: string };
 const FIXED_PLATFORMS = ["Instagram", "Facebook", "Threads", "X", "LinkedIn", "Website / Portfolio"];
 function defaultSocials(): SocialAccount[] {
   return FIXED_PLATFORMS.map((platform, i) => ({ id: `social-${i}`, platform, value: "", custom: false }));
 }
-const DEFAULT_PROFILE: ProfileValue = { name: "", socials: defaultSocials(), avatarUrl: "" };
+const DEFAULT_PROFILE: ProfileValue = { name: "", socials: defaultSocials(), avatarUrl: "", whatIDo: "", openFor: "", featuredLink: "" };
+const STAGES: { value: Stage; label: string; dot: string }[] = [
+  { value: "to-reach", label: "To reach", dot: "#6B6660" },
+  { value: "pitched", label: "Pitched", dot: "#E6A800" },
+  { value: "in-conversation", label: "In conversation", dot: "#1A9A4A" },
+  { value: "follow-up", label: "Follow-up due", dot: "#DB200D" },
+  { value: "won", label: "Won", dot: "#0D0D0C" },
+  { value: "paused", label: "Paused", dot: "#A8A29E" },
+  { value: "archived", label: "Archived", dot: "#A8A29E" },
+];
+const WORK_TYPES: { value: WorkType; label: string }[] = [
+  { value: "", label: "Not set" },
+  { value: "branding", label: "Branding" },
+  { value: "editorial", label: "Editorial" },
+  { value: "social", label: "Social" },
+  { value: "collaboration", label: "Collaboration" },
+  { value: "other", label: "Other" },
+];
+function stageLabel(s?: Stage): string { return STAGES.find(x => x.value === s)?.label || "To reach"; }
+function workTypeLabel(w?: WorkType): string { return WORK_TYPES.find(x => x.value === w)?.label || ""; }
+function stageFromLegacy(replied: boolean, followedUp: boolean): Stage {
+  if (followedUp && replied) return "follow-up";
+  if (replied) return "in-conversation";
+  if (followedUp) return "follow-up";
+  return "to-reach";
+}
+function flagsFromStage(stage: Stage): { replied: boolean; followedUp: boolean } {
+  if (stage === "in-conversation" || stage === "follow-up" || stage === "won") return { replied: true, followedUp: stage === "follow-up" || stage === "won" };
+  if (stage === "pitched") return { replied: false, followedUp: false };
+  if (stage === "paused" || stage === "archived") return { replied: false, followedUp: false };
+  return { replied: false, followedUp: false };
+}
+function normalizeContactValue(v: any): ContactValue {
+  const replied = !!v?.replied;
+  const followedUp = !!v?.followedUp;
+  const stage: Stage = (typeof v?.stage === "string" && STAGES.some(s => s.value === v.stage)) ? v.stage : stageFromLegacy(replied, followedUp);
+  const flags = flagsFromStage(stage);
+  // Keep legacy booleans in sync with stage, but respect explicit stage if present
+  const finalReplied = v?.stage ? flags.replied : replied;
+  const finalFollowed = v?.stage ? flags.followedUp : followedUp;
+  return {
+    name: typeof v?.name === "string" ? v.name : "",
+    channel: typeof v?.channel === "string" ? v.channel : "",
+    outreachDate: typeof v?.outreachDate === "string" ? v.outreachDate : "",
+    contactDetails: typeof v?.contactDetails === "string" ? v.contactDetails : "",
+    link: typeof v?.link === "string" ? v.link : "",
+    replied: finalReplied,
+    followedUp: finalFollowed,
+    notes: typeof v?.notes === "string" ? v.notes : "",
+    createdAt: typeof v?.createdAt === "string" ? v.createdAt : new Date().toISOString(),
+    updatedAt: typeof v?.updatedAt === "string" ? v.updatedAt : new Date().toISOString(),
+    stage,
+    whyThem: typeof v?.whyThem === "string" ? v.whyThem : "",
+    whatSent: typeof v?.whatSent === "string" ? v.whatSent : "",
+    nextStep: typeof v?.nextStep === "string" ? v.nextStep : "",
+    workType: (typeof v?.workType === "string" && WORK_TYPES.some(w => w.value === v.workType)) ? v.workType : "",
+    followUpDate: typeof v?.followUpDate === "string" ? v.followUpDate : "",
+    featuredLink: typeof v?.featuredLink === "string" ? v.featuredLink : "",
+  };
+}
+function normalizeProfileValue(raw: any, fallbackName = ""): ProfileValue {
+  return {
+    name: typeof raw?.name === "string" ? raw.name : fallbackName,
+    socials: normalizeSocials(raw?.socials ?? raw?.socialLinks),
+    avatarUrl: typeof raw?.avatarUrl === "string" ? raw.avatarUrl : "",
+    whatIDo: typeof raw?.whatIDo === "string" ? raw.whatIDo : "",
+    openFor: typeof raw?.openFor === "string" ? raw.openFor : "",
+    featuredLink: typeof raw?.featuredLink === "string" ? raw.featuredLink : "",
+  };
+}
 function normalizeSocials(raw: unknown): SocialAccount[] {
   const base = defaultSocials();
   if (!Array.isArray(raw)) return base;
@@ -179,9 +250,9 @@ function matchesShortcut(e: KeyboardEvent, canonical: string): boolean {
 }
 
 const DEFAULT_TEMPLATES: TemplateItem[] = [
-  { id: "first-outreach", title: "First outreach", text: "Hi [Name],\n\nI loved your recent [detail] — the way you handled it really stayed with me. I'm a visual designer focused on branding, editorial, and social, and I kept thinking about how your work and mine might fit together.\n\nIf you're open to it, I'd love to share a few relevant pieces. No pressure at all — I just admired the work and wanted to say hello.\n\nWarmly" },
-  { id: "follow-up", title: "Polite follow-up", text: "Hi [Name],\n\nJust floating my last message back up — no pressure at all. I know inboxes get busy.\n\nIf it's helpful, I can share a quick idea or a relevant piece for [detail]. And if now isn't the right time, that's completely fine too.\n\nWarmly" },
-  { id: "thank-you", title: "Thank you / after collab", text: "Hi [Name],\n\nThank you for the conversation — I really enjoyed [detail] and working through it with you.\n\nIf anything comes up down the line, I'm happy to help. Let's stay in touch.\n\nWarmly" },
+  { id: "first-outreach", title: "First outreach", workType: "branding", portfolioLink: "", text: "Hi [Name],\n\nI loved your recent [detail] — the way you handled it really stayed with me. I'm a visual designer focused on branding, editorial, and social, and I kept thinking about how your work and mine might fit together.\n\nIf you're open to it, I'd love to share a few relevant pieces. No pressure at all — I just admired the work and wanted to say hello.\n\nWarmly" },
+  { id: "follow-up", title: "Polite follow-up", workType: "", portfolioLink: "", text: "Hi [Name],\n\nJust floating my last message back up — no pressure at all. I know inboxes get busy.\n\nIf it's helpful, I can share a quick idea or a relevant piece for [detail]. And if now isn't the right time, that's completely fine too.\n\nWarmly" },
+  { id: "thank-you", title: "Thank you / after collab", workType: "collaboration", portfolioLink: "", text: "Hi [Name],\n\nThank you for the conversation — I really enjoyed [detail] and working through it with you.\n\nIf anything comes up down the line, I'm happy to help. Let's stay in touch.\n\nWarmly" },
 ];
 type ModalState = { mode: "add" } | { mode: "edit"; contact: Contact } | null;
 // --- Supabase: per-user cloud storage ---
@@ -592,8 +663,8 @@ export default function App() {
     const out: Contact[] = [];
     let cursor: string | undefined;
     for (let i = 0; i < 12; i++) {
-      const data = await api("records.list", { collection: "outreach-contacts", limit: 100, ...(cursor ? { cursor } : {}) }) as { records: Contact[]; next_cursor?: string };
-      out.push(...(data.records || []));
+      const data = await api("records.list", { collection: "outreach-contacts", limit: 100, ...(cursor ? { cursor } : {}) }) as { records: { id: string; value: any }[]; next_cursor?: string };
+      out.push(...(data.records || []).map(r => ({ id: r.id, value: normalizeContactValue(r.value) })));
       cursor = data.next_cursor;
       if (!cursor) break;
     }
@@ -612,12 +683,11 @@ export default function App() {
           setSettingsId(first.id);
           if (first.value.themeMode) setThemeMode(first.value.themeMode);
           if (typeof first.value.scratchpad === "string") { setScratchpad(first.value.scratchpad); scratchpadRef.current = first.value.scratchpad; }
-          if (Array.isArray(first.value.templates) && first.value.templates.length > 0) { setTemplates(first.value.templates); templatesRef.current = first.value.templates; }
+          if (Array.isArray(first.value.templates) && first.value.templates.length > 0) { const norm = first.value.templates.map((t: any) => ({ id: String(t.id || ""), title: String(t.title || ""), text: String(t.text || ""), workType: (WORK_TYPES.some(w => w.value === t.workType) ? t.workType : "") as WorkType, portfolioLink: typeof t.portfolioLink === "string" ? t.portfolioLink : "" })); setTemplates(norm); templatesRef.current = norm; }
           if (first.value.profile && typeof first.value.profile === "object") {
-            const rawSocials = (first.value.profile as { socials?: unknown; socialLinks?: unknown }).socials ?? (first.value.profile as { socials?: unknown; socialLinks?: unknown }).socialLinks
-            const savedName = typeof first.value.profile.name === "string" ? first.value.profile.name : "";
             const metaName = typeof (user as { user_metadata?: { full_name?: unknown } } | null)?.user_metadata?.full_name === "string" ? (user as { user_metadata: { full_name: string } }).user_metadata.full_name : "";
-            const p: ProfileValue = { name: savedName || metaName || "", socials: normalizeSocials(rawSocials), avatarUrl: typeof (first.value.profile as { avatarUrl?: unknown }).avatarUrl === "string" ? (first.value.profile as { avatarUrl: string }).avatarUrl : "" };
+            const p: ProfileValue = normalizeProfileValue(first.value.profile, metaName);
+            if (!p.name && metaName) p.name = metaName;
             setProfile(p); profileRef.current = p; setProfileDraft(p);
           }
           if (first.value.shortcuts && typeof first.value.shortcuts === "object") {
@@ -723,13 +793,14 @@ export default function App() {
     const today = todayISO();
     const daysSince = (d: string) => { if (!d) return -1; const then = new Date(`${d}T12:00:00`).getTime(); const now = new Date(`${today}T12:00:00`).getTime(); return Math.floor((now - then) / 86400000); };
     const list = contacts.filter(c => {
-      if (filter === "to-reach" && c.value.replied) return false;
-      if (filter === "replied" && !c.value.replied) return false;
-      if (filter === "followed" && !c.value.followedUp) return false;
-      if (filter === "today" && c.value.outreachDate !== today) return false;
-      if (filter === "needs-follow-up" && (c.value.replied || daysSince(c.value.outreachDate) < 4)) return false;
+      const stage = c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp);
+      if (filter === "to-reach" && stage !== "to-reach") return false;
+      if (filter === "replied" && !["in-conversation", "won"].includes(stage)) return false;
+      if (filter === "followed" && stage !== "follow-up") return false;
+      if (filter === "today" && c.value.followUpDate !== today && c.value.outreachDate !== today) return false;
+      if (filter === "needs-follow-up" && !(stage === "follow-up" || (!c.value.replied && daysSince(c.value.outreachDate) >= 4))) return false;
       if (!q) return true;
-      return [c.value.name, c.value.channel, c.value.contactDetails, c.value.link].some(v => (v || "").toLowerCase().includes(q));
+      return [c.value.name, c.value.channel, c.value.contactDetails, c.value.link, c.value.whyThem, c.value.whatSent, c.value.nextStep, c.value.workType].some(v => (v || "").toLowerCase().includes(q));
     });
     return [...list].sort((a, b) => {
       if (filter === "needs-follow-up") {
@@ -746,12 +817,13 @@ export default function App() {
   const counts = useMemo(() => {
     const today = todayISO();
     const daysSince = (d: string) => { if (!d) return -1; const then = new Date(`${d}T12:00:00`).getTime(); const now = new Date(`${today}T12:00:00`).getTime(); return Math.floor((now - then) / 86400000); };
-    return { total: contacts.length, replied: contacts.filter(c => c.value.replied).length, followed: contacts.filter(c => c.value.followedUp).length, toReach: contacts.filter(c => !c.value.replied).length, outreachToday: contacts.filter(c => c.value.outreachDate === today).length, needsFollowUp: contacts.filter(c => !c.value.replied && daysSince(c.value.outreachDate) >= 4).length };
+    const followUpDue = contacts.filter(c => { const s = c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp); if (s === "follow-up") return true; if (c.value.followUpDate && c.value.followUpDate <= today && s !== "won" && s !== "archived") return true; return !c.value.replied && daysSince(c.value.outreachDate) >= 4; });
+    return { total: contacts.length, replied: contacts.filter(c => c.value.replied).length, followed: contacts.filter(c => c.value.followedUp).length, toReach: contacts.filter(c => (c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp)) === "to-reach").length, outreachToday: contacts.filter(c => c.value.outreachDate === today || c.value.followUpDate === today).length, needsFollowUp: followUpDue.length, inConversation: contacts.filter(c => (c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp)) === "in-conversation").length, followUpDueList: followUpDue };
   }, [contacts]);
 
   const exportCSV = () => {
-    const headers = ["name","channel","outreach date","contact","link","replied","followed up","notes"];
-    const rows = contacts.map(c => [c.value.name, c.value.channel, c.value.outreachDate, c.value.contactDetails, displayLink(c), c.value.replied ? "Yes" : "No", c.value.followedUp ? "Yes" : "No", c.value.notes]);
+    const headers = ["name","channel","outreach date","contact","link","stage","work type","why them","what sent","next step","follow-up date","featured link","replied","followed up","notes"];
+    const rows = contacts.map(c => [c.value.name, c.value.channel, c.value.outreachDate, c.value.contactDetails, displayLink(c), stageLabel(c.value.stage), workTypeLabel(c.value.workType), c.value.whyThem || "", c.value.whatSent || "", c.value.nextStep || "", c.value.followUpDate || "", c.value.featuredLink || "", c.value.replied ? "Yes" : "No", c.value.followedUp ? "Yes" : "No", c.value.notes]);
     const csv = "\uFEFF" + [headers, ...rows].map(r => r.map(csvCell).join(",")).join("\r\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -768,8 +840,22 @@ export default function App() {
 
   const toggleStatus = async (field: "replied" | "followedUp") => {
     if (!selected) return;
-    try { await persistContact(selected, { [field]: !selected.value[field] }); }
+    try {
+      const nextVal = !selected.value[field];
+      const curStage = selected.value.stage || stageFromLegacy(selected.value.replied, selected.value.followedUp);
+      let nextStage = curStage;
+      if (field === "replied") nextStage = nextVal ? (curStage === "to-reach" || curStage === "pitched" ? "in-conversation" : curStage) : "to-reach";
+      if (field === "followedUp") nextStage = nextVal ? "follow-up" : (selected.value.replied ? "in-conversation" : "pitched");
+      const flags = flagsFromStage(nextStage);
+      await persistContact(selected, { [field]: nextVal, stage: nextStage, replied: field === "replied" ? nextVal : flags.replied, followedUp: field === "followedUp" ? nextVal : flags.followedUp });
+    }
     catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t update status"); }
+  };
+  const setStage = async (stage: Stage) => {
+    if (!selected) return;
+    const flags = flagsFromStage(stage);
+    try { await persistContact(selected, { stage, replied: flags.replied, followedUp: flags.followedUp }); showToast(`Moved to ${stageLabel(stage)}`); }
+    catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t update stage"); }
   };
 
   const startResize = (e: React.MouseEvent) => {
@@ -788,11 +874,11 @@ export default function App() {
   };
 
   // ---- Form ----
-  const [form, setForm] = useState({ name: "", channel: "", outreachDate: todayISO(), contactDetails: "", link: "", replied: false, followedUp: false, notes: "" });
+  const [form, setForm] = useState({ name: "", channel: "", outreachDate: todayISO(), contactDetails: "", link: "", replied: false, followedUp: false, notes: "", stage: "to-reach" as Stage, whyThem: "", whatSent: "", nextStep: "", workType: "" as WorkType, followUpDate: "", featuredLink: "" });
   const previewLink = modal ? normalizeLink(form.link, form.channel, form.contactDetails) : "";
   const showPreview = previewLink.startsWith("http") || previewLink.startsWith("mailto:");
-  const openAdd = (prefillNotes?: string, opts?: { clearScratchpadAfterSave?: boolean }) => { setForm({ name: "", channel: "", outreachDate: todayISO(), contactDetails: "", link: "", replied: false, followedUp: false, notes: prefillNotes || "" }); setFormError(null); setPendingClearScratchpad(!!opts?.clearScratchpadAfterSave); setModal({ mode: "add" }); };
-  const openEdit = (c: Contact) => { setForm({ name: c.value.name, channel: c.value.channel, outreachDate: c.value.outreachDate || todayISO(), contactDetails: c.value.contactDetails, link: c.value.link, replied: c.value.replied, followedUp: c.value.followedUp, notes: c.value.notes }); setFormError(null); setModal({ mode: "edit", contact: c }); };
+  const openAdd = (prefillNotes?: string, opts?: { clearScratchpadAfterSave?: boolean; prefill?: Partial<typeof form> }) => { setForm({ name: "", channel: "", outreachDate: todayISO(), contactDetails: "", link: "", replied: false, followedUp: false, notes: prefillNotes || "", stage: "to-reach", whyThem: "", whatSent: "", nextStep: "", workType: "", followUpDate: "", featuredLink: profile.featuredLink || "", ...(opts?.prefill || {}) }); setFormError(null); setPendingClearScratchpad(!!opts?.clearScratchpadAfterSave); setModal({ mode: "add" }); };
+  const openEdit = (c: Contact) => { const v = normalizeContactValue(c.value); setForm({ name: v.name, channel: v.channel, outreachDate: v.outreachDate || todayISO(), contactDetails: v.contactDetails, link: v.link, replied: v.replied, followedUp: v.followedUp, notes: v.notes, stage: v.stage || "to-reach", whyThem: v.whyThem || "", whatSent: v.whatSent || "", nextStep: v.nextStep || "", workType: v.workType || "", followUpDate: v.followUpDate || "", featuredLink: v.featuredLink || "" }); setFormError(null); setModal({ mode: "edit", contact: c }); };
   useEffect(() => {
     if (modal) { const t = setTimeout(() => formRef.current?.querySelector<HTMLInputElement>("input")?.focus(), 40); return () => clearTimeout(t); }
   }, [modal]);
@@ -806,11 +892,13 @@ export default function App() {
     try {
       if (modal?.mode === "edit") {
         const c = modal.contact;
-        await persistContact(c, { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: form.replied, followedUp: form.followedUp, notes: form.notes });
+        const flags = flagsFromStage(form.stage);
+        await persistContact(c, { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: flags.replied, followedUp: flags.followedUp, notes: form.notes, stage: form.stage, whyThem: form.whyThem.trim(), whatSent: form.whatSent.trim(), nextStep: form.nextStep.trim(), workType: form.workType, followUpDate: form.followUpDate, featuredLink: form.featuredLink.trim() });
         if (selectedId === c.id) setNotesDraft(form.notes);
         showToast("Contact updated"); selectContact(c.id);
       } else {
-        const value: ContactValue = { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: form.replied, followedUp: form.followedUp, notes: form.notes, createdAt: now, updatedAt: now };
+        const flags = flagsFromStage(form.stage);
+        const value: ContactValue = { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: flags.replied, followedUp: flags.followedUp, notes: form.notes, createdAt: now, updatedAt: now, stage: form.stage, whyThem: form.whyThem.trim(), whatSent: form.whatSent.trim(), nextStep: form.nextStep.trim(), workType: form.workType, followUpDate: form.followUpDate, featuredLink: form.featuredLink.trim() };
         const created = await api("records.create", { collection: "outreach-contacts", value, idempotency_key: `contact-${uid()}` }) as { id: string };
         await reloadContacts(); setModal(null); showToast("Contact added");
         if (pendingClearScratchpad) { setScratchpad(""); scratchpadRef.current = ""; setScratchpadSavedAt(null); setClearConfirm(false); setPendingClearScratchpad(false); saveSettings(themeMode, selectedId); }
@@ -835,13 +923,13 @@ export default function App() {
 
   // ---- Settings: Profile + Shortcuts ----
   const openSettings = (tab: "profile" | "shortcuts" | "account") => {
-    setProfileDraft({ name: profile.name, socials: normalizeSocials(profile.socials) });
+    setProfileDraft({ name: profile.name, socials: normalizeSocials(profile.socials), avatarUrl: profile.avatarUrl || "", whatIDo: profile.whatIDo || "", openFor: profile.openFor || "", featuredLink: profile.featuredLink || "" });
     setSettingsTab(tab);
     setSettingsOpen(true);
     setCapturing(null);
   };
   const saveProfile = async () => {
-    const next: ProfileValue = { name: profileDraft.name.trim(), socials: normalizeSocials(profileDraft.socials.map(s => ({ ...s, platform: s.platform.trim(), value: s.value.trim() }))), avatarUrl: (profileDraft.avatarUrl || "").trim() };
+    const next: ProfileValue = { name: profileDraft.name.trim(), socials: normalizeSocials(profileDraft.socials.map(s => ({ ...s, platform: s.platform.trim(), value: s.value.trim() }))), avatarUrl: (profileDraft.avatarUrl || "").trim(), whatIDo: (profileDraft.whatIDo || "").trim(), openFor: (profileDraft.openFor || "").trim(), featuredLink: (profileDraft.featuredLink || "").trim() };
     setProfile(next); profileRef.current = next; setProfileDraft(next);
     try { await saveSettings(themeMode, selectedId); showToast("Profile saved"); } catch { showToast("Profile saved"); }
     setSettingsOpen(false);
@@ -1013,7 +1101,9 @@ export default function App() {
   }, [capturing, settingsOpen, modal, deleteTarget, panelOpen, selected, selectedId, selectedLink, filtered, shortcuts, themeMode, busy, form]);
 
   const todayLabel = new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-  const focusLine = counts.needsFollowUp > 0 ? `Focus: Follow up with ${counts.needsFollowUp} ${counts.needsFollowUp === 1 ? "person" : "people"} today.` : counts.outreachToday === 0 && counts.total > 0 ? "Focus: Reach out to 1 new person today." : counts.total === 0 ? "Focus: Your first outreach will show here. Draft it below." : "Focus: You're caught up — pick one thread to deepen.";
+  const nextBest = (counts as any).followUpDueList?.[0] as Contact | undefined;
+  const focusLine = counts.needsFollowUp > 0 ? `Focus: Follow up with ${counts.needsFollowUp} ${counts.needsFollowUp === 1 ? "person" : "people"} today — start with ${nextBest?.value.name || "the oldest thread"}.` : counts.outreachToday === 0 && counts.total > 0 ? "Focus: Reach out to 1 new person today." : counts.total === 0 ? "Focus: Your first outreach will show here. Draft it below." : "Focus: You're caught up — pick one thread to deepen.";
+  const todayDesk = { due: counts.needsFollowUp, waiting: (counts as any).inConversation || 0, todayCount: counts.outreachToday };
   const applyFocus = (kind: "today" | "needs-follow-up" | "replied") => { setFilter(kind); setActiveFocus(kind === "today" ? "Outreach today" : kind === "needs-follow-up" ? "Needs follow-up" : "Replied"); if (isMobile || isTablet) { setPanelOpen(false); setMinimized(false); } };
   const onScratchpadChange = (text: string) => {
     setScratchpad(text); scratchpadRef.current = text; setScratchpadSavedAt(null); setClearConfirm(false); setScratchpadSaving(true);
@@ -1021,7 +1111,9 @@ export default function App() {
     scratchpadTimer.current = window.setTimeout(async () => { try { await saveSettings(themeMode, selectedId); setScratchpadSavedAt(formatTime(new Date())); } catch { /* keep draft in view; retry on next change */ } finally { setScratchpadSaving(false); } }, 400);
   };
   const clearScratchpad = async () => { setScratchpad(""); scratchpadRef.current = ""; setClearConfirm(false); setScratchpadSaving(true); try { await saveSettings(themeMode, selectedId); setScratchpadSavedAt(formatTime(new Date())); } catch { showToast("Couldn’t clear scratchpad"); } finally { setScratchpadSaving(false); } };
-  const saveTemplate = async (id: string) => { const next = templates.map(t => t.id === id ? { ...t, text: templateDraft } : t); setTemplates(next); templatesRef.current = next; setEditingTemplateId(null); try { await saveSettings(themeMode, selectedId); showToast("Template saved"); } catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t save template"); } };
+  const [templateWorkType, setTemplateWorkType] = useState<WorkType>("");
+  const [templatePortfolio, setTemplatePortfolio] = useState("");
+  const saveTemplate = async (id: string) => { const next = templates.map(t => t.id === id ? { ...t, text: templateDraft, workType: templateWorkType, portfolioLink: templatePortfolio } : t); setTemplates(next); templatesRef.current = next; setEditingTemplateId(null); try { await saveSettings(themeMode, selectedId); showToast("Template saved"); } catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t save template"); } };
   const resetTemplates = async () => { setTemplates(DEFAULT_TEMPLATES); templatesRef.current = DEFAULT_TEMPLATES; setEditingTemplateId(null); try { await saveSettings(themeMode, selectedId); showToast("Templates reset"); } catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t reset templates"); } };
 
   const activeTemplate = templates.find(t => t.id === activeTemplateId) || null;
@@ -1033,7 +1125,7 @@ export default function App() {
       <section aria-label="Today">
         <div className="small-caps" style={{ color: "var(--muted)" }}>Today</div>
         <div className="mt-6 grid grid-cols-3 gap-0" role="group" aria-label="Today overview">
-          {([{ kind: "today", label: "Today", value: counts.outreachToday }, { kind: "needs-follow-up", label: "Needs follow-up", value: counts.needsFollowUp }, { kind: "replied", label: "Replied", value: counts.replied }] as const).map((row, i) => (
+          {([{ kind: "needs-follow-up", label: "Follow-up due", value: todayDesk.due }, { kind: "replied", label: "In conversation", value: todayDesk.waiting }, { kind: "today", label: "Today", value: todayDesk.todayCount }] as const).map((row, i) => (
             <button key={row.kind} onClick={() => applyFocus(row.kind)} aria-label={`Show ${row.label}: ${row.value}`} className={`min-h-[56px] px-1 py-2.5 text-center ${i > 0 ? "border-l" : ""}`} style={{ borderColor: "var(--divider)" }}>
               <span className="block text-[20px] font-semibold leading-[1.3] tracking-[-0.01em]">{row.value}</span>
               <span className="small-caps mt-1 block leading-[1.3]" style={{ color: "var(--muted)" }}>{row.label}</span>
@@ -1041,6 +1133,14 @@ export default function App() {
           ))}
         </div>
         <p className="mt-4 truncate text-left text-[15px] leading-relaxed" title={focusLine}>{focusLine}</p>
+        {nextBest && (
+          <button onClick={() => selectContact(nextBest.id)} className="mt-4 w-full rounded-[16px] border p-4 text-left" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
+            <span className="small-caps block" style={{ color: "var(--muted)" }}>Next best action</span>
+            <span className="mt-2 block truncate text-[15px] font-semibold">{nextBest.value.name} — {stageLabel(nextBest.value.stage)}</span>
+            <span className="mt-1 block truncate text-[13px]" style={{ color: "var(--muted)" }}>{nextBest.value.nextStep || nextBest.value.whyThem || "Open to see context and follow up"}</span>
+            <span className="mt-2 block text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Open thread →</span>
+          </button>
+        )}
       </section>
 
       <section aria-label="Quick note" className="mt-14">
@@ -1075,7 +1175,11 @@ export default function App() {
             {editingTemplateId === activeTemplate.id ? (
               <div>
                 <label htmlFor={`template-${activeTemplate.id}`} className="sr-only">Edit {activeTemplate.title}</label>
-                <textarea id={`template-${activeTemplate.id}`} value={templateDraft} onChange={e => setTemplateDraft(e.target.value)} rows={6} className="w-full resize-y border-b bg-transparent pb-2 text-sm leading-relaxed outline-none" style={{ borderColor: "var(--divider)" }} />
+                <label className="small-caps block" style={{ color: "var(--muted)" }}>Work type</label>
+                <select value={templateWorkType} onChange={e => setTemplateWorkType(e.target.value as WorkType)} className="mt-2 h-[44px] w-full rounded-[12px] border px-3 text-sm" style={{ borderColor: "var(--divider)", background: "var(--input)" }}>{WORK_TYPES.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}</select>
+                <label className="small-caps mt-4 block" style={{ color: "var(--muted)" }}>Featured work link</label>
+                <input value={templatePortfolio} onChange={e => setTemplatePortfolio(e.target.value)} placeholder="https://your-portfolio.com/work" className="mt-2 h-[44px] w-full rounded-[12px] border px-3 text-sm" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
+                <textarea id={`template-${activeTemplate.id}`} value={templateDraft} onChange={e => setTemplateDraft(e.target.value)} rows={6} className="mt-4 w-full resize-y border-b bg-transparent pb-2 text-sm leading-relaxed outline-none" style={{ borderColor: "var(--divider)" }} />
                 <div className="mt-3 flex items-center gap-5">
                   <button onClick={() => saveTemplate(activeTemplate.id)} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Save</button>
                   <button onClick={() => setEditingTemplateId(null)} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Cancel</button>
@@ -1083,11 +1187,14 @@ export default function App() {
               </div>
             ) : (
               <>
+                {activeTemplate.workType && <span className="mb-3 inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{workTypeLabel(activeTemplate.workType)} • Pitch with work</span>}
+                {activeTemplate.portfolioLink && <a href={activeTemplate.portfolioLink} target="_blank" rel="noopener noreferrer" className="mb-3 block truncate text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Featured work: {activeTemplate.portfolioLink}</a>}
+                {profile.whatIDo && <p className="mb-3 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Your pitch card: {profile.name || "You"} — {profile.whatIDo}{profile.openFor ? ` • Open for ${profile.openFor}` : ""}</p>}
                 <p className="whitespace-pre-wrap text-sm leading-relaxed" style={{ color: "var(--muted)" }}>{activeTemplate.text}</p>
                 <div className="mt-4 flex flex-wrap items-center gap-5">
                   <button onClick={() => copyText(activeTemplate.text, `template-${activeTemplate.id}`)} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>{copied === `template-${activeTemplate.id}` ? "Copied" : "Copy"}</button>
-                  <button onClick={() => openAdd(activeTemplate.text)} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Use in new contact</button>
-                  <button onClick={() => { setEditingTemplateId(activeTemplate.id); setTemplateDraft(activeTemplate.text); }} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Edit</button>
+                  <button onClick={() => openAdd(activeTemplate.text, { prefill: { workType: activeTemplate.workType || "", featuredLink: activeTemplate.portfolioLink || profile.featuredLink || "" } })} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Use in new contact</button>
+                  <button onClick={() => { setEditingTemplateId(activeTemplate.id); setTemplateDraft(activeTemplate.text); setTemplateWorkType(activeTemplate.workType || ""); setTemplatePortfolio(activeTemplate.portfolioLink || ""); }} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Edit</button>
                   <button onClick={resetTemplates} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Reset</button>
                 </div>
               </>
@@ -1110,6 +1217,11 @@ export default function App() {
         <p className="mt-4 text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>
           {selected.value.channel || "—"} <span className="mx-1">•</span> {selected.value.outreachDate ? formatDate(selected.value.outreachDate) : "—"} <span className="mx-1">•</span> Updated {new Date(selected.value.updatedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
         </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium" style={{ background: "var(--tint)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: STAGES.find(s => s.value === (selected.value.stage || "to-reach"))?.dot }} />{stageLabel(selected.value.stage)}</span>
+          {selected.value.workType && <span className="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{workTypeLabel(selected.value.workType)}</span>}
+          {selected.value.followUpDate && <span className="inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium" style={{ background: "#FFF0EE", color: "#DB200D" }}>Follow-up {formatDate(selected.value.followUpDate)}</span>}
+        </div>
       </div>
       <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-6 pb-10 pt-2 sm:px-7">
         <div className="mt-10 border-t" style={{ borderColor: "var(--divider)" }}>
@@ -1135,9 +1247,12 @@ export default function App() {
               <button onClick={() => openEdit(selected)} className="flex min-h-[32px] shrink-0 items-center whitespace-nowrap text-sm font-medium underline decoration-1 underline-offset-4" style={{ color: "var(--muted)" }}>Add link</button>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-x-8 gap-y-4 border-b py-6" style={{ borderColor: "var(--divider)" }}>
-            <span className="small-caps" style={{ color: "var(--muted)" }}>Status</span>
-            <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
+          <div className="border-b py-5" style={{ borderColor: "var(--divider)" }}>
+            <div className="flex items-center justify-between gap-3"><span className="small-caps" style={{ color: "var(--muted)" }}>Journey</span><span className="text-xs" style={{ color: "var(--muted)" }}>Tap a stage to move it</span></div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {STAGES.map(s => { const active = (selected.value.stage || "to-reach") === s.value; return <button key={s.value} onClick={() => setStage(s.value)} aria-pressed={active} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={active ? { background: "var(--text)", color: "var(--bg)", borderColor: "var(--text)" } : { borderColor: "var(--divider)", color: "var(--muted)" }}>{s.label}</button>; })}
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-x-8 gap-y-4">
               {(["replied", "followedUp"] as const).map(field => {
                 const on = selected.value[field];
                 return (
@@ -1152,6 +1267,15 @@ export default function App() {
             </div>
           </div>
         </div>
+        {(selected.value.whyThem || selected.value.whatSent || selected.value.nextStep || selected.value.featuredLink) && (
+          <section className="mt-10 space-y-4">
+            <p className="small-caps" style={{ color: "var(--muted)" }}>Context — why them</p>
+            {selected.value.whyThem && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>Why them</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.whyThem}</p></div>}
+            {selected.value.whatSent && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>What I sent</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.whatSent}</p></div>}
+            {selected.value.nextStep && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>Next step</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.nextStep}</p></div>}
+            {selected.value.featuredLink && <a href={selected.value.featuredLink} target="_blank" rel="noopener noreferrer" className="block truncate text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Featured work for them →</a>}
+          </section>
+        )}
         <section className="mt-12">
           <div className="flex items-baseline justify-between gap-3">
             <label htmlFor="notes-editor" className="small-caps" style={{ color: "var(--muted)" }}>Notes</label>
@@ -1424,8 +1548,8 @@ export default function App() {
             {loading ? <p className="px-4 py-12 text-center text-sm" style={{ color: "var(--muted)" }}>Loading your outreach…</p> : filtered.length === 0 ? (
               contacts.length === 0 && !search && filter === "all" ? (
                 <div className="px-4 py-16 text-center sm:py-20">
-                  <p className="text-[26px] font-medium tracking-[-0.01em]">No contacts yet.</p>
-                  <p className="mx-auto mt-3 max-w-[420px] leading-relaxed" style={{ color: "var(--muted)" }}>Add your first outreach to start tracking replies and follow-ups.</p>
+                  <p className="text-[26px] font-medium tracking-[-0.01em]">No one on your list yet.</p>
+                  <p className="mx-auto mt-3 max-w-[420px] leading-relaxed" style={{ color: "var(--muted)" }}>Start with someone whose work you loved — add why them, what you’d send, and what comes next. Reach keeps the human thread.</p>
                   <button onClick={() => openAdd()} className="mt-6 inline-flex min-h-[46px] items-center gap-2 rounded-[12px] px-5 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
                 </div>
               ) : (
@@ -1435,8 +1559,9 @@ export default function App() {
               const isSel = c.id === selectedId;
               const norm = displayLink(c);
               const _daysAgo = c.value.outreachDate ? Math.floor((new Date(`${todayISO()}T12:00:00`).getTime() - new Date(`${c.value.outreachDate}T12:00:00`).getTime()) / 86400000) : -1;
-              const _isDue = !c.value.replied && _daysAgo >= 4;
-              const _isDueToday = !c.value.replied && _daysAgo === 0;
+              const _stage = c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp);
+              const _isDue = _stage === "follow-up" || (c.value.followUpDate ? c.value.followUpDate <= todayISO() && !["won","archived"].includes(_stage) : !c.value.replied && _daysAgo >= 4);
+              const _isDueToday = c.value.followUpDate === todayISO() || (!c.value.replied && _daysAgo === 0 && _stage === "to-reach");
               return (
                 <article key={c.id} onClick={() => selectContact(c.id)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectContact(c.id); } }} tabIndex={0} aria-label={`Open details for ${c.value.name}`} className="relative cursor-pointer px-4 py-[14px] sm:px-5" style={{ background: isSel ? "var(--tint)" : "transparent", borderBottom: "1px solid var(--divider)" }}>
                   <div className="flex flex-col gap-1 lg:grid lg:items-center lg:gap-4 lg:grid-cols-[minmax(200px,1.5fr)_minmax(180px,1.1fr)_88px_76px]">
@@ -1444,18 +1569,13 @@ export default function App() {
                       <h3 className="truncate text-[16px]" style={{ lineHeight: 1.3, fontWeight: isSel ? 600 : 500 }}>{c.value.name}</h3>
                       <p className="truncate text-[13px]" style={{ color: "var(--muted)", lineHeight: 1.3 }}>{c.value.channel || "—"} <span className="mx-1">•</span> {c.value.outreachDate ? formatDate(c.value.outreachDate) : "—"}</p>
                       <span className="mt-1.5 flex flex-wrap gap-1.5">
-                        {c.value.replied ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "var(--tint)", color: "var(--text)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: "#1A9A4A" }} />Replied</span>
-                        ) : c.value.followedUp ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "var(--tint)", color: "var(--text)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--brand)" }} />Followed up</span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "var(--bg-soft)", color: "var(--muted)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--muted)" }} />To reach</span>
-                        )}
+                        <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "var(--tint)", color: "var(--text)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: STAGES.find(s => s.value === (c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp)))?.dot }} />{stageLabel(c.value.stage)}</span>
+                        {c.value.workType && <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{workTypeLabel(c.value.workType)}</span>}
                         {_isDue && <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "#FFF0EE", color: "#DB200D" }}>Follow-up due • {_daysAgo}d</span>}
                         {_isDueToday && <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "#FFF8E1", color: "#8A6D00" }}>Due today</span>}
                       </span>
                     </div>
-                    <div className="min-w-0"><p className="truncate text-left text-sm" title={c.value.contactDetails || undefined} style={{ lineHeight: 1.3, color: c.value.contactDetails ? undefined : "var(--muted)" }}>{c.value.contactDetails || "—"}</p></div>
+                    <div className="min-w-0"><p className="truncate text-left text-sm" title={c.value.nextStep || c.value.contactDetails || undefined} style={{ lineHeight: 1.3, color: (c.value.nextStep || c.value.contactDetails) ? undefined : "var(--muted)" }}>{c.value.nextStep || c.value.contactDetails || "—"}</p>{c.value.whyThem && <p className="truncate text-left text-[12px]" style={{ color: "var(--muted)" }}>{c.value.whyThem}</p>}</div>
                     <div className="flex items-center justify-between gap-3 lg:contents">
                       <div className="min-w-0 text-left">
                         {norm ? <a href={norm} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="flex h-8 items-center gap-1 whitespace-nowrap text-sm font-medium" style={{ color: "var(--brand)", lineHeight: 1.3 }} aria-label={`Open link for ${c.value.name}`}>Link <ExternalLink size={13} /></a> : <span className="flex h-8 items-center text-sm" style={{ color: "var(--muted)", lineHeight: 1.3 }}>—</span>}
@@ -1579,7 +1699,7 @@ export default function App() {
                 <div className="mt-5">
                   <h3 className="text-[32px] font-semibold leading-[1.02] tracking-[-0.02em]" style={{ color: "#DB200D" }}>{profileDraft.name?.trim() ? profileDraft.name.trim() : "Your profile"}</h3>
                   <p className="mt-2 truncate text-[26px] font-semibold leading-tight tracking-[-0.01em]">{user?.email || "Signed in"}</p>
-                  <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>This is how you show up in Reach. Your name and photo are only for you — they never go on the main screen.</p>
+                  <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>This is how you show up in Reach — your studio card. Your name and photo stay private, but your what-I-do and featured work shape every pitch you send.</p>
                 </div>
 
                 {/* Two cards — Reach counts only */}
@@ -1632,6 +1752,25 @@ export default function App() {
 
                 {/* Name field */}
                 <div className="mt-7"><label htmlFor="profile-name" className="small-caps block" style={{ color: "var(--muted)" }}>Name</label><input id="profile-name" value={profileDraft.name} onChange={e => setProfileDraft(d => ({ ...d, name: e.target.value }))} placeholder="Your name" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+
+                {/* Creative identity — your pitch card */}
+                <div className="mt-6 rounded-[20px] border p-4" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }}>
+                  <p className="small-caps" style={{ color: "var(--muted)" }}>Your pitch card — how you show up</p>
+                  <div className="mt-4 space-y-3">
+                    <div><label htmlFor="profile-what" className="small-caps block" style={{ color: "var(--muted)" }}>What I do</label><input id="profile-what" value={profileDraft.whatIDo || ""} onChange={e => setProfileDraft(d => ({ ...d, whatIDo: e.target.value }))} placeholder="Visual designer — branding, editorial, social" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+                    <div><label htmlFor="profile-open" className="small-caps block" style={{ color: "var(--muted)" }}>Open for</label><input id="profile-open" value={profileDraft.openFor || ""} onChange={e => setProfileDraft(d => ({ ...d, openFor: e.target.value }))} placeholder="Branding for studios, editorial collabs…" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+                    <div><label htmlFor="profile-featured" className="small-caps block" style={{ color: "var(--muted)" }}>Featured work</label><input id="profile-featured" value={profileDraft.featuredLink || ""} onChange={e => setProfileDraft(d => ({ ...d, featuredLink: e.target.value }))} placeholder="https://your-portfolio.com/best-work" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+                  </div>
+                  {(profileDraft.whatIDo || profileDraft.openFor || profileDraft.featuredLink) && (
+                    <div className="mt-4 rounded-[16px] border p-4" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
+                      <p className="text-[15px] font-semibold">{profileDraft.name || "You"}</p>
+                      {profileDraft.whatIDo && <p className="mt-1 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>{profileDraft.whatIDo}</p>}
+                      {profileDraft.openFor && <p className="mt-1 text-xs font-medium" style={{ color: "var(--brand)" }}>Open for: {profileDraft.openFor}</p>}
+                      {profileDraft.featuredLink && <a href={profileDraft.featuredLink} target="_blank" rel="noopener noreferrer" className="mt-2 block truncate text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>{profileDraft.featuredLink}</a>}
+                    </div>
+                  )}
+                  <p className="mt-3 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>This is the card that travels with your pitches. Keep it honest and specific — one line about what you do beats a list.</p>
+                </div>
 
                 {/* Socials — card style */}
                 <div id="profile-socials" className="mt-8 scroll-mt-4">
@@ -1744,11 +1883,22 @@ export default function App() {
               </div>
               <div><label htmlFor="f-details" className="small-caps block" style={{ color: "var(--muted)" }}>Contact details</label><input id="f-details" value={form.contactDetails} onChange={e => setForm({ ...form, contactDetails: e.target.value })} placeholder="@handle, email, or phone" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
               <div><label htmlFor="f-link" className="small-caps block" style={{ color: "var(--muted)" }}>Link</label><input id="f-link" value={form.link} onChange={e => setForm({ ...form, link: e.target.value })} placeholder="https://…" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Tip: just type a handle or a domain slash handle — we will complete it using the channel.</p>{showPreview && <p className="mt-1 break-all text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Will save as: <a href={previewLink} target="_blank" rel="noopener noreferrer" className="font-medium underline underline-offset-2" style={{ color: "var(--brand)" }}>{previewLink}</a></p>}</div>
-              <div className="flex flex-wrap gap-2">
-                {(["replied", "followedUp"] as const).map(k => (
-                  <label key={k} className="flex min-h-[44px] cursor-pointer items-center gap-2.5 rounded-[12px] border px-3.5 text-sm font-medium" style={{ borderColor: "var(--divider)" }}><input type="checkbox" checked={form[k]} onChange={e => setForm({ ...form, [k]: e.target.checked })} className="h-[18px] w-[18px]" style={{ accentColor: "var(--text)" }} /> {k === "replied" ? "Replied" : "Followed up"}</label>
-                ))}
+              <div>
+                <label className="small-caps block" style={{ color: "var(--muted)" }}>Journey — where is this?</label>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {STAGES.map(s => <button key={s.value} type="button" onClick={() => setForm({ ...form, stage: s.value })} aria-pressed={form.stage === s.value} className="min-h-[36px] rounded-full border px-3 text-xs font-medium" style={form.stage === s.value ? { background: "var(--text)", color: "var(--bg)", borderColor: "var(--text)" } : { borderColor: "var(--divider)", color: "var(--muted)" }}>{s.label}</button>)}
+                </div>
               </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div><label htmlFor="f-worktype" className="small-caps block" style={{ color: "var(--muted)" }}>Work type</label><select id="f-worktype" value={form.workType} onChange={e => setForm({ ...form, workType: e.target.value as WorkType })} className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }}>{WORK_TYPES.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}</select></div>
+                <div><label htmlFor="f-followup" className="small-caps block" style={{ color: "var(--muted)" }}>Follow-up date</label><input id="f-followup" type="date" value={form.followUpDate} onChange={e => setForm({ ...form, followUpDate: e.target.value })} className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+              </div>
+              <div><label htmlFor="f-why" className="small-caps block" style={{ color: "var(--muted)" }}>Why them — what work did you love?</label><textarea id="f-why" value={form.whyThem} onChange={e => setForm({ ...form, whyThem: e.target.value })} rows={2} placeholder="Loved their recent branding — the way they handled type stayed with me…" className="mt-2 w-full resize-y rounded-[12px] border px-3.5 py-3 text-[15px] leading-relaxed" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div><label htmlFor="f-sent" className="small-caps block" style={{ color: "var(--muted)" }}>What I sent</label><input id="f-sent" value={form.whatSent} onChange={e => setForm({ ...form, whatSent: e.target.value })} placeholder="Intro + 2 branding pieces" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+                <div><label htmlFor="f-next" className="small-caps block" style={{ color: "var(--muted)" }}>Next step</label><input id="f-next" value={form.nextStep} onChange={e => setForm({ ...form, nextStep: e.target.value })} placeholder="Follow up in 4 days with idea" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+              </div>
+              <div><label htmlFor="f-featured" className="small-caps block" style={{ color: "var(--muted)" }}>Featured work for them</label><input id="f-featured" value={form.featuredLink} onChange={e => setForm({ ...form, featuredLink: e.target.value })} placeholder="https://your-portfolio.com/work" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>This piece travels with your pitch. Leave it as your profile featured work, or pick a piece that fits them.</p></div>
               <div><label htmlFor="f-notes" className="small-caps block" style={{ color: "var(--muted)" }}>Notes</label><textarea id="f-notes" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3} placeholder="Context, next step…" className="mt-2 w-full resize-y rounded-[12px] border px-3.5 py-3 text-[15px] leading-relaxed" style={{ borderColor: "var(--divider)", background: "var(--input)", minHeight: 84 }} /></div>
               </div>
               <div className="shrink-0 border-t px-5 py-3 sm:px-6" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
