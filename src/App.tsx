@@ -1348,80 +1348,60 @@ export default function App() {
   return (
     <div data-safe-area-inset-root style={{ boxSizing: "border-box", paddingTop: "var(--safe-area-inset-top)", minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="overflow-x-clip">
       <header data-safe-area-sticky-top style={{ top: "var(--safe-area-inset-top)", background: "var(--bg)", borderColor: "var(--divider)" }} className="sticky z-30 border-b">
-        {isMobile ? (
-          <div className="flex items-center justify-between gap-3 px-4 py-3">
-            <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="shrink-0">
-              {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>}
+        <div className="flex w-full items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <span className="h-[10px] w-[10px] shrink-0 rounded-[2px]" style={{ background: "#DB200D" }} aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="truncate text-[19px] font-medium leading-none tracking-[-0.01em]">Reach</p>
+              <p className="mt-1 hidden truncate text-xs sm:block" style={{ color: "var(--muted)" }}>Outreach, curated.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => changeTheme(themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system")} aria-label={`Theme: ${themeMode}. Tap to change theme.`} title={`Theme: ${themeMode}`} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[12px] border" style={{ borderColor: "var(--divider)" }}>
+              {themeMode === "dark" ? <Moon size={17} /> : themeMode === "light" ? <Sun size={17} /> : <Monitor size={17} />}
             </button>
-            <div className="flex items-center gap-2">
-              <span className="h-[10px] w-[10px] shrink-0 rounded-[2px]" style={{ background: "#DB200D" }} aria-hidden="true" />
-              <p className="text-[19px] font-medium leading-none tracking-[-0.01em]">Reach</p>
-            </div>
-            <button onClick={() => openAdd()} className="flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-4 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add</button>
+            <button onClick={exportCSV} className="hidden min-h-[44px] items-center gap-2 rounded-[12px] border px-3.5 text-sm font-medium sm:flex" style={{ borderColor: "var(--divider)" }}><Download size={16} /><span className="hidden lg:inline">Export</span></button>
+            <button onClick={() => openAdd()} className="hidden min-h-[44px] items-center gap-2 rounded-[12px] px-4 text-sm font-medium text-white sm:flex" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
+            <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="flex min-h-[44px] items-center gap-2">
+              {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>}
+              {profile.name ? <span className="hidden max-w-[120px] truncate text-sm font-medium md:inline">{profile.name}</span> : null}
+            </button>
           </div>
-        ) : (
-          <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 sm:px-6 lg:flex-nowrap lg:px-8">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="h-[10px] w-[10px] shrink-0 rounded-[2px]" style={{ background: "#DB200D" }} aria-hidden="true" />
-              <div className="min-w-0"><p className="truncate text-[19px] font-medium leading-none tracking-[-0.01em]">Reach</p><p className="mt-1 truncate text-xs" style={{ color: "var(--muted)" }}>Outreach, curated.</p></div>
-            </div>
-            <div className="ml-auto flex flex-wrap items-center gap-2">
-              <div className="flex rounded-[12px] border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="group" aria-label="Theme">
-                {([{ v: "system", label: "System", Icon: Monitor }, { v: "light", label: "Light", Icon: Sun }, { v: "dark", label: "Dark", Icon: Moon }] as const).map(({ v, label, Icon }) => (
-                  <button key={v} onClick={() => changeTheme(v)} aria-pressed={themeMode === v} className="flex min-h-[36px] items-center gap-1.5 rounded-[9px] px-2.5 text-xs font-medium sm:px-3" style={themeMode === v ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}><Icon size={14} /><span className="hidden sm:inline">{label}</span><span className="sm:hidden">{label.slice(0, 1)}</span></button>
-                ))}
-              </div>
-              <button onClick={exportCSV} className="flex min-h-[44px] items-center gap-2 rounded-[12px] border px-3.5 text-sm font-medium sm:px-4" style={{ borderColor: "var(--divider)" }}><Download size={16} /><span className="hidden sm:inline">Export spreadsheet</span><span className="sm:hidden">Export</span></button>
-              <button onClick={() => openAdd()} className="flex min-h-[44px] items-center gap-2 rounded-[12px] px-4 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
-              <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="flex min-h-[44px] items-center gap-2">
-                {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>}
-                {profile.name ? <span className="hidden max-w-[120px] truncate text-sm font-medium sm:inline">{profile.name}</span> : null}
-              </button>
-            </div>
-          </div>
-        )}
+        </div>
       </header>
 
-      <main className="flex w-full max-w-none items-stretch px-0 sm:px-6 lg:px-8">
+      <main className="flex w-full max-w-none items-stretch px-4 sm:px-6 lg:px-8">
         <section className="flex min-w-0 flex-1 flex-col py-6" style={{ minHeight: "calc(100vh - 69px)", paddingBottom: isMobile ? 110 : undefined }}>
-          <div className="px-4 pt-5 sm:px-0 lg:pt-0">
+          <div className="px-0 pt-5 lg:pt-0">
             <p className="small-caps" style={{ color: "var(--muted)" }}>Your outreach</p>
             <h1 className="mt-2 text-[34px] font-semibold leading-[1.02] tracking-[-0.025em] sm:text-[clamp(30px,4vw,44px)]">Every conversation,<br /> held with care.</h1>
             <p className="mt-3 max-w-[560px] text-[15px] leading-relaxed" style={{ color: "var(--muted)" }}>Track who you reached out to, what was said, and what comes next — without losing the human thread.</p>
           </div>
-          {isMobile && (
-            <div className="mt-6 px-4">
-              <div className="grid grid-cols-3 gap-3">
-                {([{ kind: "today", label: "Today", value: counts.outreachToday }, { kind: "needs-follow-up", label: "Follow-up", value: counts.needsFollowUp }, { kind: "replied", label: "Replied", value: counts.replied }] as const).map((row) => (
-                  <button key={row.kind} onClick={() => applyFocus(row.kind)} className="rounded-[16px] border p-3.5 text-left" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-                    <span className="block text-[26px] font-semibold leading-none tracking-[-0.02em]">{row.value}</span>
-                    <span className="mt-2 block text-[12px] font-medium leading-tight" style={{ color: "var(--muted)" }}>{row.label}</span>
-                  </button>
-                ))}
+          {!isDesktop && (
+            <div className="mt-6 px-0">
+              <div className="rounded-[16px] border" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
+                <button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+                  <span className="small-caps" style={{ color: "var(--muted)" }}>Overview</span>
+                  <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>Open overview →</span>
+                </button>
+                <div className="grid grid-cols-3 border-t" style={{ borderColor: "var(--divider)" }}>
+                  {([{ kind: "today", label: "Today", value: counts.outreachToday }, { kind: "needs-follow-up", label: "Needs follow-up", value: counts.needsFollowUp }, { kind: "replied", label: "Replied", value: counts.replied }] as const).map((row, i) => (
+                    <button key={row.kind} onClick={() => applyFocus(row.kind)} aria-label={`Show ${row.label}: ${row.value}`} className={`min-h-[64px] px-1 py-3 text-center ${i > 0 ? "border-l" : ""}`} style={{ borderColor: "var(--divider)" }}>
+                      <span className="block text-[22px] font-semibold leading-none tracking-[-0.01em]">{row.value}</span>
+                      <span className="small-caps mt-1.5 block leading-tight" style={{ color: "var(--muted)" }}>{row.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="truncate px-4 pb-3 pt-3 text-[13px] leading-relaxed" title={focusLine} style={{ color: "var(--muted)" }}>{focusLine}</p>
+                <div className="flex flex-wrap gap-2 border-t px-4 py-3" style={{ borderColor: "var(--divider)" }}>
+                  <button onClick={() => applyFocus("needs-follow-up")} className="min-h-[36px] rounded-full border px-3.5 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>Focus: Follow up</button>
+                  <button onClick={() => { setPanelOpen(true); setMinimized(false); setActiveTemplateId(templates[0]?.id || null); }} className="min-h-[36px] rounded-full border px-3.5 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>Templates</button>
+                  <button onClick={exportCSV} className="min-h-[36px] rounded-full border px-3.5 text-xs font-medium sm:hidden" style={{ borderColor: "var(--divider)" }}>Export</button>
+                </div>
               </div>
-              <div className="mt-5 grid grid-cols-4 gap-2">
-                <button onClick={() => openAdd()} className="flex flex-col items-center gap-2 py-1">
-                  <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}><Plus size={22} /></span>
-                  <span className="text-[12px] font-medium">Add</span>
-                </button>
-                <button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="flex flex-col items-center gap-2 py-1">
-                  <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}><Target size={20} /></span>
-                  <span className="text-[12px] font-medium">Focus</span>
-                </button>
-                <button onClick={() => { setPanelOpen(true); setMinimized(false); setActiveTemplateId(templates[0]?.id || null); }} className="flex flex-col items-center gap-2 py-1">
-                  <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}><FileText size={20} /></span>
-                  <span className="text-[12px] font-medium">Templates</span>
-                </button>
-                <button onClick={exportCSV} className="flex flex-col items-center gap-2 py-1">
-                  <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}><Download size={20} /></span>
-                  <span className="text-[12px] font-medium">Export</span>
-                </button>
-              </div>
-              <p className="mt-4 text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>{focusLine}</p>
             </div>
           )}
-
-          <div className="mt-6 flex flex-col gap-3 px-4 sm:px-0 lg:flex-row lg:items-center">
+          <div className="mt-6 flex flex-col gap-3 px-0 lg:flex-row lg:items-center">
             <div className="relative flex-1">
               <Search size={17} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: "var(--muted)" }} />
               <input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, channel, contact, or link…" aria-label="Search contacts" className="h-[48px] w-full rounded-[12px] border pl-10 pr-10 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
@@ -1433,11 +1413,11 @@ export default function App() {
               ))}
             </div>
           </div>
-          <p className="mt-4 px-4 text-sm sm:px-0" style={{ color: "var(--muted)" }} aria-live="polite">{counts.total} {counts.total === 1 ? "contact" : "contacts"} • {counts.replied} replied • {counts.followed} followed up</p>
-          {activeFocus && <div className="mt-3 flex flex-wrap items-center gap-2 px-4 sm:px-0"><span className="inline-flex min-h-[32px] items-center rounded-full px-3 text-xs font-medium" style={{ background: "var(--text)", color: "var(--bg)" }}>Showing: {activeFocus}</span><button onClick={() => { setActiveFocus(null); setFilter("all"); }} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>Clear</button></div>}
-          {!selected && !isMobile && <div className="mt-3 px-4 sm:px-0 lg:hidden"><button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="min-h-[40px] rounded-[10px] border px-3.5 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Today focus &amp; quick capture</button></div>}
+          <p className="mt-4 px-0 text-sm" style={{ color: "var(--muted)" }} aria-live="polite">{counts.total} {counts.total === 1 ? "contact" : "contacts"} • {counts.replied} replied • {counts.followed} followed up</p>
+          {activeFocus && <div className="mt-3 flex flex-wrap items-center gap-2 px-0"><span className="inline-flex min-h-[32px] items-center rounded-full px-3 text-xs font-medium" style={{ background: "var(--text)", color: "var(--bg)" }}>Showing: {activeFocus}</span><button onClick={() => { setActiveFocus(null); setFilter("all"); }} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>Clear</button></div>}
 
-          {loadError && <div className="mx-4 mt-4 flex items-start gap-3 rounded-[12px] border p-4 sm:mx-0" style={{ borderColor: "var(--divider)" }}><AlertTriangle size={18} className="mt-0.5 shrink-0" /><div><p className="text-sm font-medium">Couldn’t reach your saved contacts.</p><p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>{loadError}</p><button onClick={loadAll} className="mt-3 min-h-[40px] rounded-[10px] border px-3 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Try again</button></div></div>}
+
+          {loadError && <div className="mx-0 mt-4 flex items-start gap-3 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}><AlertTriangle size={18} className="mt-0.5 shrink-0" /><div><p className="text-sm font-medium">Couldn’t reach your saved contacts.</p><p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>{loadError}</p><button onClick={loadAll} className="mt-3 min-h-[40px] rounded-[10px] border px-3 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Try again</button></div></div>}
 
           <div className="mt-3 border-t" style={{ borderColor: "var(--divider)", marginLeft: 0, marginRight: 0 }}>
             {loading ? <p className="px-4 py-12 text-center text-sm" style={{ color: "var(--muted)" }}>Loading your outreach…</p> : filtered.length === 0 ? (
@@ -1457,7 +1437,7 @@ export default function App() {
               const _isDue = !c.value.replied && _daysAgo >= 4;
               const _isDueToday = !c.value.replied && _daysAgo === 0;
               return (
-                <article key={c.id} onClick={() => selectContact(c.id)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectContact(c.id); } }} tabIndex={0} aria-label={`Open details for ${c.value.name}`} className="relative cursor-pointer" style={{ background: isSel ? "var(--tint)" : "transparent", borderBottom: "1px solid var(--divider)", padding: "14px 20px" }}>
+                <article key={c.id} onClick={() => selectContact(c.id)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectContact(c.id); } }} tabIndex={0} aria-label={`Open details for ${c.value.name}`} className="relative cursor-pointer px-4 py-[14px] sm:px-5" style={{ background: isSel ? "var(--tint)" : "transparent", borderBottom: "1px solid var(--divider)" }}>
                   <div className="flex flex-col gap-1 lg:grid lg:items-center lg:gap-4 lg:grid-cols-[minmax(200px,1.5fr)_minmax(180px,1.1fr)_88px_76px]">
                     <div className="min-w-0">
                       <h3 className="truncate text-[16px]" style={{ lineHeight: 1.3, fontWeight: isSel ? 600 : 500 }}>{c.value.name}</h3>
@@ -1489,7 +1469,7 @@ export default function App() {
               );
             })}
           </div>
-          {!isMobile && <footer className="mt-auto px-4 pt-8 pb-2 text-xs sm:px-0" style={{ color: "var(--muted)" }}>{counts.total} {counts.total === 1 ? "contact" : "contacts"} • Data saved to your private account</footer>}
+          <footer className="mt-auto px-0 pt-8 pb-2 text-xs" style={{ color: "var(--muted)" }}>{counts.total} {counts.total === 1 ? "contact" : "contacts"} • Data saved to your private account</footer>
           {showDeleteAll && (
             <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Delete all my data">
               <button aria-label="Close" onClick={() => setShowDeleteAll(false)} className="absolute inset-0 bg-black/35" />
@@ -1530,14 +1510,14 @@ export default function App() {
             <Home size={20} />
             <span className="text-[11px] font-medium">Home</span>
           </button>
-          <button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
+          <button onClick={() => applyFocus("needs-follow-up")} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
             <Target size={20} />
             <span className="text-[11px] font-medium">Focus</span>
           </button>
           <button onClick={() => openAdd()} aria-label="Add contact" className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}><Plus size={24} /></button>
-          <button onClick={() => { setPanelOpen(true); setMinimized(false); }} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
+          <button onClick={() => { setPanelOpen(true); setMinimized(false); setActiveTemplateId(templates[0]?.id || null); }} className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
             <FileText size={20} />
-            <span className="text-[11px] font-medium">Notes</span>
+            <span className="text-[11px] font-medium">Templates</span>
           </button>
           <button onClick={() => openSettings("profile")} aria-label="Open settings" className="flex min-w-[64px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
             {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[24px] w-[24px] rounded-full object-cover" /> : <span className="flex h-[24px] w-[24px] items-center justify-center rounded-full text-[11px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }}>{headerInitials}</span>}
@@ -1554,21 +1534,19 @@ export default function App() {
       )}
 
       {isMobile && panelOpen && !minimized && (
-        <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label="Contact details">
-          <button aria-label="Close details" onClick={closePanel} className="absolute inset-0 bg-black/30" />
+        <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={selected ? "Contact details" : "Overview"}>
+          <button aria-label={selected ? "Close details" : "Close overview"} onClick={closePanel} className="absolute inset-0 bg-black/30" />
           <section className="absolute inset-x-0 bottom-0 flex flex-col overflow-hidden rounded-t-[16px]" style={{ height: `${sheetPct}vh`, background: "var(--surface)" }}>
             <div onPointerDown={startSheetDrag} className="flex shrink-0 cursor-grab flex-col items-center gap-1 pt-2.5 pb-1 active:cursor-grabbing" aria-label="Drag to resize sheet"><span className="h-[4px] w-[40px] rounded-full" style={{ background: "var(--divider)" }} /><span className="text-xs" style={{ color: "var(--muted)" }}>Drag to resize</span></div>
-            <div className="flex items-center justify-between px-3">
-              <button onClick={() => setSheetPct(p => p > 60 ? 35 : 88)} className="flex min-h-[40px] items-center gap-1 px-2 text-sm font-medium">{sheetPct > 60 ? <><ChevronDown size={17} /> Collapse</> : <><ChevronUp size={17} /> Expand</>}</button>
-              <div className="flex items-center gap-1"><button onClick={() => setMinimized(true)} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label="Minimize details" title="Minimize"><Minus size={18} /></button><button onClick={closePanel} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label="Close details" title="Close"><X size={18} /></button></div>
-            </div>
+            {panelHeader}
+            <button onClick={() => setSheetPct(p => p > 60 ? 35 : 88)} className="flex min-h-[32px] shrink-0 items-center justify-center gap-1 text-xs font-medium" style={{ color: "var(--muted)" }}>{sheetPct > 60 ? <><ChevronDown size={15} /> Collapse sheet</> : <><ChevronUp size={15} /> Expand sheet</>}</button>
             {selected ? <div key={selected.id} className="animate-swap flex min-h-0 flex-1 flex-col">{panelContent}</div> : <div className="flex min-h-0 flex-1 flex-col">{emptyPanel}</div>}
           </section>
         </div>
       )}
 
       {(isMobile || isTablet) && panelOpen && minimized && selected && (
-        <button onClick={() => setMinimized(false)} className="fixed bottom-4 left-4 right-4 z-40 flex min-h-[52px] items-center justify-between rounded-[14px] border px-4 text-left shadow-lg" style={{ background: "var(--surface)", borderColor: "var(--divider)" }}>
+        <button onClick={() => setMinimized(false)} className="fixed bottom-24 left-4 right-4 z-40 flex min-h-[52px] items-center justify-between rounded-[14px] border px-4 text-left shadow-lg sm:bottom-4" style={{ background: "var(--surface)", borderColor: "var(--divider)" }}>
           <span className="min-w-0"><span className="small-caps block" style={{ color: "var(--muted)" }}>Minimized</span><span className="block truncate font-medium">{selected.value.name}</span></span><span className="flex items-center gap-1 text-sm font-medium" style={{ color: "var(--brand)" }}><ChevronUp size={17} /> Expand</span>
         </button>
       )}
@@ -1576,13 +1554,14 @@ export default function App() {
       {settingsOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Settings">
           <button aria-label="Close settings" onClick={() => setSettingsOpen(false)} className="absolute inset-0 bg-black/35" />
-          <div className="animate-fade relative max-h-[92vh] w-full max-w-[620px] overflow-y-auto rounded-t-[24px] p-5 sm:rounded-[24px] sm:p-6" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <div className="flex items-start justify-between gap-4"><div><p className="small-caps" style={{ color: "var(--muted)" }}>Settings</p><h2 className="mt-2 text-[24px] font-semibold">Settings</h2></div><button onClick={() => setSettingsOpen(false)} aria-label="Close settings" className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]"><X size={19} /></button></div>
-            <div className="mt-5 flex gap-1 rounded-full border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="tablist" aria-label="Settings tabs">
+          <div className="animate-fade relative flex max-h-[88vh] w-full max-w-[620px] flex-col overflow-hidden rounded-t-[24px] sm:rounded-[24px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+            <div className="flex shrink-0 items-start justify-between gap-4 px-5 pt-5 sm:px-6 sm:pt-6"><div><p className="small-caps" style={{ color: "var(--muted)" }}>Settings</p><h2 className="mt-1 text-[20px] font-semibold leading-tight">Settings</h2></div><button onClick={() => setSettingsOpen(false)} aria-label="Close settings" className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]"><X size={19} /></button></div>
+            <div className="mx-5 mt-4 flex shrink-0 gap-1 rounded-full border p-1 sm:mx-6" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="tablist" aria-label="Settings tabs">
               {(["profile", "shortcuts", "account"] as const).map(t => (
                 <button key={t} role="tab" aria-selected={settingsTab === t} onClick={() => setSettingsTab(t)} className="min-h-[40px] flex-1 rounded-full px-4 text-sm font-medium" style={settingsTab === t ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{t === "profile" ? "Profile" : t === "shortcuts" ? "Shortcuts" : "Account"}</button>
               ))}
             </div>
+            <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-5 sm:px-6">
             {settingsTab === "profile" ? (
               <div className="pt-5">
                 {/* Top row — avatar left, Save pill right */}
@@ -1749,6 +1728,7 @@ export default function App() {
                 <p className="mt-4 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Deleting removes all your contacts, notes, templates and settings from this account. Your login stays, but with no data. This cannot be undone.</p>
               </div>
             )}
+          </div>
           </div>
         </div>
       )}
