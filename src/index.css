@@ -1,40 +1,52 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
-/* EXECUTED BLUEPRINT - Visual System
-   Type: Display 28/32 600, Title 20/24 600, Body 15/22 400, Caption 12/16 500, Small Caps 11/14 600 tracking 0.14em
-   Spacing: 4, 8, 12, 16, 24, 32, 48 - no arbitrary values
-   Color: Brand only for primary CTA + active dot + 1 accent per screen, max 10% of pixels. Never for body text.
-   Density: List = density (56px rows). Details = breathing room (24px gaps, 1.8 line-height). Never mix.
-*/
 :root {
-  --bg: #FFFFFF;
-  --bg-soft: #FAF9F7;
+  /* 3-Tier Warm Archival Surfaces */
+  --bg: #FAF9F7;
   --surface: #FFFFFF;
-  --surface-2: #FAF9F7;
+  --surface-2: #F3EFEA;
+  --tint: #EFECE6;
+  --divider: #E6E1DA;
+  --input: #FFFFFF;
+
+  /* Typography & Semantic Colors (1 Accent, 1 Success, 1 Danger, 1 Warn) */
   --text: #0D0D0C;
   --muted: #6B6660;
-  --divider: #E8E3DE;
   --brand: #DB200D;
-  --tint: #EDE9E4;
-  --input: #FFFFFF;
-  --shadow: 0 18px 50px rgba(13, 13, 12, 0.12);
+  --success: #1A9A4A;
+  --danger: #DB200D;
+  --warn: #B45309;
   --focus: #DB200D;
+
+  /* Theme-Safe Badge Surfaces */
+  --badge-due-bg: color-mix(in srgb, var(--brand) 10%, transparent);
+  --badge-today-bg: color-mix(in srgb, #D97706 12%, transparent);
+
+  /* Elevation */
+  --shadow: 0 12px 32px rgba(13, 13, 12, 0.08);
 }
 
 [data-theme="dark"] {
   --bg: #0D0D0C;
-  --bg-soft: #161614;
   --surface: #161614;
-  --surface-2: #1B1B19;
+  --surface-2: #1C1C19;
+  --tint: #22221E;
+  --divider: #2A2A26;
+  --input: #161614;
+
   --text: #F0EBE7;
   --muted: #A8A29E;
-  --divider: #2A2A27;
   --brand: #FF4A38;
-  --tint: #1E1E1B;
-  --input: #1B1B19;
-  --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  --success: #22C55E;
+  --danger: #FF4A38;
+  --warn: #FBBF24;
   --focus: #FF4A38;
+
+  --badge-due-bg: color-mix(in srgb, var(--brand) 16%, transparent);
+  --badge-today-bg: color-mix(in srgb, #FBBF24 14%, transparent);
+
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 * {
@@ -50,6 +62,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 20px;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -70,22 +84,20 @@ select:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--focus) !important;
   outline-offset: 2px;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 18%, transparent) !important;
-  border-color: var(--focus);
 }
 
-/* Seamless inline-editable fields in Details pane: look like clean typography at rest */
+/* Seamless click-to-edit dossier inputs */
 .inline-field {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 8px;
-  padding: 2px 6px;
-  margin: -2px -6px;
-  transition: background-color 120ms ease, border-color 120ms ease;
+  padding: 4px 8px;
+  margin: -4px -8px;
+  transition: background-color 100ms ease, border-color 100ms ease;
 }
 
 .inline-field:hover {
-  background: color-mix(in srgb, var(--tint) 55%, transparent);
+  background: var(--surface-2);
 }
 
 .inline-field:focus,
@@ -96,84 +108,91 @@ select:focus-visible,
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent) !important;
 }
 
-input, textarea, select {
-  border-color: var(--divider);
+/* 4-Token Typography System */
+.type-dossier-title {
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
-input:focus, textarea:focus, select:focus {
-  border-color: var(--focus);
+.type-section-title {
+  font-size: 20px;
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
 .small-caps {
   font-size: 11px;
-  letter-spacing: 0.14em;
+  line-height: 16px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 600;
-  line-height: 14px;
 }
 
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  scrollbar-width: none;
+/* Uniform 64px 2-Line Contact Row */
+.contact-row {
+  position: relative;
+  min-height: 64px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--divider);
+  cursor: pointer;
+  transition: background-color 80ms ease;
 }
 
-.thin-scroll::-webkit-scrollbar {
-  width: 5px;
+.contact-row:hover {
+  background: color-mix(in srgb, var(--tint) 55%, transparent);
 }
-.thin-scroll::-webkit-scrollbar-thumb {
-  background: var(--divider);
-  border-radius: 99px;
+
+.contact-row[data-selected="true"] {
+  background: var(--tint);
 }
+
+.contact-row[data-selected="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--brand);
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+.thin-scroll::-webkit-scrollbar { width: 5px; }
+.thin-scroll::-webkit-scrollbar-thumb { background: var(--divider); border-radius: 99px; }
 
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.animate-fade {
-  animation: fadeUp 0.22s ease both;
-}
+.animate-fade { animation: fadeUp 0.18s ease both; }
 
 @keyframes toastIn {
   from { opacity: 0; transform: translateY(8px) translateX(-50%); }
   to { opacity: 1; transform: translateY(0) translateX(-50%); }
 }
-.toast-in {
-  animation: toastIn 0.2s ease both;
-}
+.toast-in { animation: toastIn 0.18s ease both; }
 
 @keyframes contentSwap {
   from { opacity: 0; }
   to { opacity: 1; }
 }
-.animate-swap {
-  animation: contentSwap 0.22s ease-out both;
-}
-
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-4px); }
-  75% { transform: translateX(4px); }
-}
-.animate-shake {
-  animation: shake 0.16s ease 2;
-  border-color: #DB200D !important;
-}
+.animate-swap { animation: contentSwap 0.16s ease-out both; }
 
 .btn-press {
   transition: transform 80ms ease, opacity 80ms ease;
 }
-.btn-press:active {
-  transform: scale(0.97);
-}
-.btn-press:disabled {
-  transform: none;
+.btn-press:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .skeleton {
   background: var(--divider);
-  border-radius: 8px;
+  border-radius: 6px;
   animation: skeletonPulse 1.2s ease-in-out infinite;
 }
 @keyframes skeletonPulse {
@@ -182,7 +201,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-fade, .toast-in, .animate-swap, .btn-press {
+  .animate-fade, .toast-in, .animate-swap, .btn-press, .skeleton {
     animation: none !important;
     transition: none !important;
   }
