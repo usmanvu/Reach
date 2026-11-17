@@ -1,2078 +1,434 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
-import { Search, Plus, Download, Pencil, Trash2, X, Minus, ExternalLink, Copy, Check, ChevronDown, ChevronUp, GripVertical, AlertTriangle, Sun, Moon, Monitor, Home, Target, FileText, Camera, Link2, Users, AtSign, LayoutGrid } from "lucide-react";
+import { Search, Plus, Download, X, Copy, Check, Trash2, ChevronDown } from "lucide-react";
 
-type Stage = "to-reach" | "pitched" | "in-conversation" | "follow-up" | "won" | "paused" | "archived";
-type WorkType = "branding" | "editorial" | "social" | "collaboration" | "other" | "";
-type ContactValue = { name: string; channel: string; outreachDate: string; contactDetails: string; link: string; replied: boolean; followedUp: boolean; notes: string; createdAt: string; updatedAt: string; stage?: Stage; whyThem?: string; whatSent?: string; nextStep?: string; workType?: WorkType; followUpDate?: string; featuredLink?: string; testimonial?: string; referredById?: string; deletedAt?: string; winNote?: string; };
+type Stage = "to-reach" | "pitched" | "in-conversation" | "follow-up" | "won";
+type WorkType = "branding" | "editorial" | "social" | "collaboration" | "";
+type ThreadKind = "created" | "why" | "sent" | "next" | "stage" | "note" | "win";
+type ThreadEntry = { id: string; kind: ThreadKind; text: string; link?: string; createdAt: string };
+type ContactValue = { name: string; channel: string; outreachDate: string; contactDetails: string; link: string; notes: string; createdAt: string; updatedAt: string; stage: Stage; whyThem: string; whatSent: string; nextStep: string; workType: WorkType; followUpDate: string; featuredLink: string; winNote: string; referredBy: string; deletedAt: string; thread: ThreadEntry[] };
 type Contact = { id: string; value: ContactValue };
 type ThemeMode = "system" | "light" | "dark";
-type Filter = "all" | "to-reach" | "replied" | "followed" | "today" | "needs-follow-up";
-type TemplateItem = { id: string; title: string; text: string; workType?: WorkType; portfolioLink?: string };
-type SocialAccount = { id: string; platform: string; value: string; custom?: boolean };
-type ProfileValue = { name: string; socials: SocialAccount[]; avatarUrl?: string; whatIDo?: string; openFor?: string; featuredLink?: string };
-const FIXED_PLATFORMS = ["Instagram", "Facebook", "Threads", "X", "LinkedIn", "Website / Portfolio"];
-function defaultSocials(): SocialAccount[] {
-  return FIXED_PLATFORMS.map((platform, i) => ({ id: `social-${i}`, platform, value: "", custom: false }));
-}
-const DEFAULT_PROFILE: ProfileValue = { name: "", socials: defaultSocials(), avatarUrl: "", whatIDo: "", openFor: "", featuredLink: "" };
-const STAGES: { value: Stage; label: string; dot: string }[] = [
-  { value: "to-reach", label: "To reach", dot: "#6B6660" },
-  { value: "pitched", label: "Pitched", dot: "#E6A800" },
-  { value: "in-conversation", label: "In conversation", dot: "#1A9A4A" },
-  { value: "follow-up", label: "Follow-up due", dot: "#DB200D" },
-  { value: "won", label: "Won", dot: "#0D0D0C" },
-  { value: "paused", label: "Paused", dot: "#A8A29E" },
-  { value: "archived", label: "Archived", dot: "#A8A29E" },
+type Filter = "all" | "to-reach" | "follow-up" | "won";
+type View = "queue" | "contacts";
+type TemplateItem = { id: string; title: string; text: string };
+type ProfileValue = { name: string; whatIDo: string; openFor: string };
+
+const STAGES: { value: Stage; label: string }[] = [
+  { value: "to-reach", label: "To reach" },
+  { value: "pitched", label: "Pitched" },
+  { value: "in-conversation", label: "In conversation" },
+  { value: "follow-up", label: "Follow-up due" },
+  { value: "won", label: "Won" },
 ];
 const WORK_TYPES: { value: WorkType; label: string }[] = [
-  { value: "", label: "Not set" },
   { value: "branding", label: "Branding" },
   { value: "editorial", label: "Editorial" },
   { value: "social", label: "Social" },
   { value: "collaboration", label: "Collaboration" },
-  { value: "other", label: "Other" },
 ];
-function stageLabel(s?: Stage): string { return STAGES.find(x => x.value === s)?.label || "To reach"; }
-function workTypeLabel(w?: WorkType): string { return WORK_TYPES.find(x => x.value === w)?.label || ""; }
-function stageFromLegacy(replied: boolean, followedUp: boolean): Stage {
-  if (followedUp && replied) return "follow-up";
-  if (replied) return "in-conversation";
-  if (followedUp) return "follow-up";
-  return "to-reach";
-}
-// DEPRECATED: Stage no longer overwrites history. Paused / Archived preserve replied / followedUp.
-// Kept only for legacy migration of contacts created before decoupling.
-function flagsFromStage(stage: Stage): { replied: boolean; followedUp: boolean } {
-  if (stage === "in-conversation" || stage === "follow-up" || stage === "won") return { replied: true, followedUp: stage === "follow-up" };
-  return { replied: false, followedUp: false };
-}
-function daysSinceISO(d: string, today: string): number { if (!d) return -1; const then = new Date(`${d}T12:00:00`).getTime(); const now = new Date(`${today}T12:00:00`).getTime(); return Math.floor((now - then) / 86400000); }
-// SINGLE SOURCE OF TRUTH for follow-up. Used by counts, filtered list, and Next Best Action. Do not duplicate this logic.
-function isFollowUpDue(c: ContactValue, today: string): boolean {
-  const s = c.stage || stageFromLegacy(c.replied, c.followedUp);
-  if (s === "won" || s === "archived" || s === "paused") return false;
-  if (c.deletedAt) return false;
-  if (c.followUpDate && c.followUpDate <= today) return true;
-  if (s === "follow-up") return true;
-  if (!c.followUpDate && !c.replied && daysSinceISO(c.outreachDate, today) >= 4) return true;
-  return false;
-}
-function safeHref(raw: string): string {
-  const v = (raw || "").trim();
-  if (!v) return "";
-  if (v.toLowerCase().startsWith("javascript:") || v.toLowerCase().startsWith("data:")) return "";
-  if (/^https?:\/\//i.test(v)) return v;
-  if (/^mailto:/i.test(v)) return v;
-  if (isEmailValue(v)) return `mailto:${v}`;
-  if (v.includes(".") && !v.includes(" ")) return `https://${v.replace(/^@+/, "")}`;
-  return "";
-}
-function parsePasteToContact(raw: string): { name: string; channel: string; link: string; contactDetails: string } {
-  const input = (raw || "").trim();
-  if (!input) return { name: "", channel: "", link: "", contactDetails: "" };
-  // URL
+const DEFAULT_TEMPLATES: TemplateItem[] = [
+  { id: "first-outreach", title: "First outreach", text: "Hi [Name],\n\nI loved your recent [detail]. The way you handled it stayed with me. I am a visual designer focused on branding, editorial, and social, and I kept thinking about how your work and mine might fit.\n\nIf you are open to it, I would love to share a few relevant pieces. No pressure, I just admired the work and wanted to say hello.\n\nWarmly" },
+  { id: "follow-up", title: "Polite follow-up", text: "Hi [Name],\n\nJust floating my last message back up. No pressure, I know inboxes get busy.\n\nIf it helps, I can share a quick idea or a relevant piece for [detail]. If now is not the right time, that is completely fine too.\n\nWarmly" },
+  { id: "thank-you", title: "Thank you", text: "Hi [Name],\n\nThank you for the conversation. I really enjoyed [detail] and working through it with you.\n\nIf anything comes up down the line, I am happy to help. Let's stay in touch.\n\nWarmly" },
+];
+const DEFAULT_PROFILE: ProfileValue = { name: "", whatIDo: "", openFor: "" };
+const SHORTCUTS = [
+  { keys: "Cmd + K", label: "Command Palette" },
+  { keys: "/", label: "Search" },
+  { keys: "N", label: "New contact" },
+  { keys: "E", label: "Edit thread" },
+  { keys: "Cmd + Enter", label: "Save" },
+  { keys: "Esc", label: "Cancel / Close" },
+  { keys: "J", label: "Next" },
+  { keys: "K", label: "Previous" },
+  { keys: "Enter", label: "Open selected" },
+  { keys: "B", label: "Back" },
+];
+
+function uid() { return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+function todayISO() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function addDaysISO(days: number) { const d = new Date(); d.setDate(d.getDate() + days); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function formatDate(v: string) { if (!v) return ""; const d = new Date(`${v}T12:00:00`); if (Number.isNaN(d.getTime())) return v; return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
+function formatTime(d: Date) { return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }); }
+function isEmailValue(v: string) { return /^[^\s@/]+@[^\s@]+\.[^\s@]+$/.test(v.trim()); }
+function daysSinceISO(d: string, today: string) { if (!d) return -1; return Math.floor((new Date(`${today}T12:00:00`).getTime() - new Date(`${d}T12:00:00`).getTime()) / 86400000); }
+function stageLabel(s: Stage) { return STAGES.find((x) => x.value === s)?.label || "To reach"; }
+function stageColor(s: Stage) { if (s === "won") return "var(--brand)"; if (s === "follow-up") return "var(--danger)"; if (s === "in-conversation") return "var(--success)"; if (s === "pitched") return "var(--text)"; return "var(--muted)"; }
+function initialsFor(name: string) { const p = (name || "").trim().split(/\s+/).filter(Boolean); if (!p.length) return "?"; if (p.length === 1) return p[0].slice(0, 2).toUpperCase(); return `${p[0][0]}${p[p.length - 1][0]}`.toUpperCase(); }
+function csvCell(v: string) { return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; }
+function safeHref(raw: string) { const v = (raw || "").trim(); if (!v) return ""; if (v.toLowerCase().startsWith("javascript:") || v.toLowerCase().startsWith("data:")) return ""; if (/^https?:\/\//i.test(v)) return v; if (/^mailto:/i.test(v)) return v; if (isEmailValue(v)) return `mailto:${v}`; if (v.includes(".") && !v.includes(" ")) return `https://${v.replace(/^@+/, "")}`; return ""; }
+function parsePasteToContact(raw: string) {
+  const input = (raw || "").trim(); if (!input) return { name: "", channel: "", link: "", contactDetails: "" };
   const urlMatch = input.match(/(https?:\/\/[^\s,]+|www\.[^\s,]+|[a-z0-9-]+\.[a-z]{2,}\/[^\s,]*)/i);
-  if (urlMatch) {
-    const link = normalizeLink(urlMatch[0], "", input);
-    const kind = channelKind(link);
-    const handle = link.replace(/^https?:\/\//, "").split("/").filter(Boolean).pop() || "";
-    return { name: handle.replace(/^@/, "").replace(/[-_]/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase()), channel: kind === "unknown" ? "Website" : kind.charAt(0).toUpperCase() + kind.slice(1), link, contactDetails: input };
-  }
+  if (urlMatch) { const link = urlMatch[0].startsWith("http") ? urlMatch[0] : `https://${urlMatch[0]}`; const handle = link.replace(/^https?:\/\//, "").split("/").filter(Boolean).pop() || ""; const name = handle.replace(/^@/, "").replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()); let channel = "Website"; if (link.includes("instagram")) channel = "Instagram"; else if (link.includes("linkedin")) channel = "LinkedIn"; else if (link.includes("x.com") || link.includes("twitter")) channel = "X"; else if (link.includes("behance")) channel = "Behance"; return { name, channel, link, contactDetails: input }; }
   if (isEmailValue(input)) return { name: input.split("@")[0].replace(/[.\-_]/g, " "), channel: "Email", link: `mailto:${input}`, contactDetails: input };
-  const handle = input.replace(/^@+/, "").replace(/\s+/g, "");
-  if (handle && !handle.includes(" ")) {
-    return { name: handle.replace(/[-_]/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase()), channel: "Instagram", link: `https://instagram.com/${handle}`, contactDetails: input };
-  }
+  const handle = input.replace(/^@+/, "").replace(/\s+/g, ""); if (handle && !handle.includes(" ")) return { name: handle.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()), channel: "Instagram", link: `https://instagram.com/${handle}`, contactDetails: input };
   return { name: input, channel: "", link: "", contactDetails: input };
 }
-function normalizeContactValue(v: any): ContactValue {
-  const replied = !!v?.replied;
-  const followedUp = !!v?.followedUp;
-  const stage: Stage = (typeof v?.stage === "string" && STAGES.some(s => s.value === v.stage)) ? v.stage : stageFromLegacy(replied, followedUp);
-  // DECOUPLED: Stage never overwrites history. Paused / Archived preserve replied / followedUp.
-  const finalReplied = replied;
-  const finalFollowed = followedUp;
-  return {
-    name: typeof v?.name === "string" ? v.name : "",
-    channel: typeof v?.channel === "string" ? v.channel : "",
-    outreachDate: typeof v?.outreachDate === "string" ? v.outreachDate : "",
-    contactDetails: typeof v?.contactDetails === "string" ? v.contactDetails : "",
-    link: typeof v?.link === "string" ? v.link : "",
-    replied: finalReplied,
-    followedUp: finalFollowed,
-    notes: typeof v?.notes === "string" ? v.notes : "",
-    createdAt: typeof v?.createdAt === "string" ? v.createdAt : new Date().toISOString(),
-    updatedAt: typeof v?.updatedAt === "string" ? v.updatedAt : new Date().toISOString(),
-    stage,
-    whyThem: typeof v?.whyThem === "string" ? v.whyThem : "",
-    whatSent: typeof v?.whatSent === "string" ? v.whatSent : "",
-    nextStep: typeof v?.nextStep === "string" ? v.nextStep : "",
-    workType: (typeof v?.workType === "string" && WORK_TYPES.some(w => w.value === v.workType)) ? v.workType : "",
-    followUpDate: typeof v?.followUpDate === "string" ? v.followUpDate : "",
-    featuredLink: typeof v?.featuredLink === "string" ? v.featuredLink : "",
-    testimonial: typeof v?.testimonial === "string" ? v.testimonial : "",
-    referredById: typeof v?.referredById === "string" ? v.referredById : "",
-    deletedAt: typeof v?.deletedAt === "string" ? v.deletedAt : "",
-    winNote: typeof v?.winNote === "string" ? v.winNote : "",
-  };
+function isFollowUpDue(c: ContactValue, today: string) {
+  if (c.stage === "won") return false; if (c.deletedAt) return false;
+  if (c.followUpDate && c.followUpDate <= today) return true;
+  if (c.stage === "follow-up") return true;
+  if (!c.followUpDate && c.stage === "pitched" && daysSinceISO(c.outreachDate, today) >= 4) return true;
+  return false;
 }
-function normalizeProfileValue(raw: any, fallbackName = ""): ProfileValue {
-  return {
-    name: typeof raw?.name === "string" ? raw.name : fallbackName,
-    socials: normalizeSocials(raw?.socials ?? raw?.socialLinks),
-    avatarUrl: typeof raw?.avatarUrl === "string" ? raw.avatarUrl : "",
-    whatIDo: typeof raw?.whatIDo === "string" ? raw.whatIDo : "",
-    openFor: typeof raw?.openFor === "string" ? raw.openFor : "",
-    featuredLink: typeof raw?.featuredLink === "string" ? raw.featuredLink : "",
-  };
-}
-function normalizeSocials(raw: unknown): SocialAccount[] {
-  const base = defaultSocials();
-  if (!Array.isArray(raw)) return base;
-  const customs: SocialAccount[] = [];
-  const byPlatform = new Map<string, string>();
-  raw.forEach((item: any, idx: number) => {
-    if (!item || typeof item !== "object") return;
-    const platform = typeof item.platform === "string" ? item.platform.trim() : "";
-    const value = typeof item.value === "string" ? item.value : "";
-    if (!platform && !value) return;
-    if (item.custom || !FIXED_PLATFORMS.includes(platform)) {
-      customs.push({ id: typeof item.id === "string" && item.id ? item.id : `social-custom-${idx}`, platform, value, custom: true });
-    } else if (!byPlatform.has(platform)) {
-      byPlatform.set(platform, value);
-    }
-  });
-  return [...base.map(s => ({ ...s, value: byPlatform.get(s.platform) || "" })), ...customs];
-}
-function socialPlaceholder(platform: string): string {
-  if (platform === "LinkedIn") return "https://linkedin.com/in/your-name";
-  if (platform === "Website / Portfolio") return "https://your-portfolio.com";
-  return "@artbymemik";
-}
-function socialHref(platform: string, rawValue: string): string {
-  const v = (rawValue || "").trim();
-  if (!v) return "";
-  if (/^https?:\/\//i.test(v)) return v;
-  if (/^[^\s@/]+@[^\s@]+\.[^\s@]+$/.test(v)) return `mailto:${v}`;
-  const handle = v.replace(/^@+/, "").replace(/\s+/g, "");
-  if (!handle) return "";
-  if (handle.includes("/") && handle.includes(".")) return `https://${handle}`;
-  const p = (platform || "").trim().toLowerCase();
-  if (p === "instagram") return `https://instagram.com/${handle}`;
-  if (p === "facebook") return `https://facebook.com/${handle}`;
-  if (p === "threads") return `https://threads.net/@${handle}`;
-  if (p === "x") return `https://x.com/${handle}`;
-  if (p === "linkedin") return `https://linkedin.com/in/${handle}`;
-  if (p === "website / portfolio" || p === "website" || p === "portfolio") {
-    if (handle.includes(".")) return `https://${handle}`;
-    return "";
-  }
-  if (handle.includes(".")) return `https://${handle}`;
-  return "";
-}
-function socialDisplay(platform: string, rawValue: string): string {
-  const href = socialHref(platform, rawValue);
-  if (!href) return (rawValue || "").trim();
-  if (href.startsWith("mailto:")) return href.slice(7);
-  try { const u = new URL(href); return `${u.hostname}${u.pathname === "/" ? "" : u.pathname}`; } catch { return href; }
-}
-function initialsFor(name: string) {
-  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
-}
+function threadLabel(k: ThreadKind) { if (k === "why") return "Why them"; if (k === "sent") return "Pitch sent"; if (k === "next") return "Next step"; if (k === "stage") return "Moved"; if (k === "win") return "What worked"; if (k === "created") return "Added"; return "Note"; }
 
-const DEFAULT_SHORTCUTS = {
-  focusSearch: "/",
-  newContact: "n",
-  cycleTheme: "t",
-  export: "mod+e",
-  openSettings: "?",
-  next: "j",
-  prev: "k",
-  openSelected: "Enter",
-  filterAll: "1",
-  filterToReach: "2",
-  filterReplied: "3",
-  filterFollowed: "4",
-  edit: "e",
-  toggleReplied: "r",
-  toggleFollowed: "f",
-  openLink: "l",
-  copy: "c",
-  minimize: "m",
-  back: "b",
-  delete: "Delete",
-  close: "Escape",
-  saveForm: "mod+Enter",
-} as const;
-type ShortcutAction = keyof typeof DEFAULT_SHORTCUTS;
-type ShortcutMap = Record<ShortcutAction, string>;
-const SHORTCUT_GROUPS: { group: string; items: { action: ShortcutAction; label: string }[] }[] = [
-  { group: "Global", items: [
-    { action: "focusSearch", label: "Focus search" },
-    { action: "newContact", label: "New contact / Focus notes when DETAILS open" },
-    { action: "cycleTheme", label: "Cycle theme" },
-    { action: "export", label: "Export" },
-    { action: "openSettings", label: "Settings / Shortcuts" },
-  ]},
-  { group: "List + Filters", items: [
-    { action: "next", label: "Next" },
-    { action: "prev", label: "Previous" },
-    { action: "openSelected", label: "Open selected" },
-    { action: "filterAll", label: "Filter: All" },
-    { action: "filterToReach", label: "Filter: To reach" },
-    { action: "filterReplied", label: "Filter: Replied" },
-    { action: "filterFollowed", label: "Filter: Followed up" },
-  ]},
-  { group: "Details", items: [
-    { action: "edit", label: "Edit" },
-    { action: "toggleReplied", label: "Toggle Replied" },
-    { action: "toggleFollowed", label: "Toggle Followed up" },
-    { action: "openLink", label: "Open link" },
-    { action: "copy", label: "Copy contact" },
-    { action: "minimize", label: "Minimize / Expand" },
-    { action: "back", label: "Back" },
-    { action: "delete", label: "Delete (always confirms)" },
-    { action: "close", label: "Close" },
-    { action: "saveForm", label: "Save in form" },
-  ]},
-];
-function canonicalFromEvent(e: KeyboardEvent | React.KeyboardEvent): string | null {
-  const k = e.key;
-  if (k === "Control" || k === "Meta" || k === "Alt" || k === "Shift") return null;
-  let keyPart = "";
-  if (k === " ") keyPart = "Space";
-  else if (k.length === 1) keyPart = k.toLowerCase();
-  else keyPart = k;
-  const parts: string[] = [];
-  if (e.ctrlKey || e.metaKey) parts.push("mod");
-  if (e.altKey) parts.push("alt");
-  parts.push(keyPart);
-  return parts.join("+");
-}
-function displayShortcut(c: string): string {
-  const parts = c.split("+");
-  const key = parts[parts.length - 1];
-  const mods = parts.slice(0, -1);
-  let keyLabel = key;
-  if (key === "Enter") keyLabel = "Enter";
-  else if (key === "Delete") keyLabel = "Del";
-  else if (key === "Escape") keyLabel = "Esc";
-  else if (key === "ArrowDown") keyLabel = "↓";
-  else if (key === "ArrowUp") keyLabel = "↑";
-  else if (key === "Space") keyLabel = "Space";
-  else if (key.length === 1) keyLabel = key.toUpperCase();
-  const modLabel = mods.map(m => m === "mod" ? "Ctrl/Cmd" : m === "alt" ? "Alt" : m).join(" + ");
-  return modLabel ? `${modLabel} + ${keyLabel}` : keyLabel;
-}
-function matchesShortcut(e: KeyboardEvent, canonical: string): boolean {
-  const parts = canonical.split("+");
-  const keyPart = parts[parts.length - 1];
-  const mods = parts.slice(0, -1);
-  const needsMod = mods.includes("mod");
-  const needsAlt = mods.includes("alt");
-  const hasMod = e.ctrlKey || e.metaKey;
-  if (needsMod !== hasMod) return false;
-  if (needsAlt !== e.altKey) return false;
-  if (keyPart === "Enter") return e.key === "Enter";
-  if (keyPart === "Delete") return e.key === "Delete" || e.key === "Backspace";
-  if (keyPart === "Escape") return e.key === "Escape";
-  if (keyPart === "ArrowDown") return e.key === "ArrowDown";
-  if (keyPart === "ArrowUp") return e.key === "ArrowUp";
-  if (keyPart === "Space") return e.key === " ";
-  if (keyPart.length === 1) {
-    if (keyPart === "?") return e.key === "?";
-    if (keyPart === "/") return e.key === "/";
-    return e.key.toLowerCase() === keyPart;
-  }
-  return e.key === keyPart;
-}
-
-const DEFAULT_TEMPLATES: TemplateItem[] = [
-  { id: "first-outreach", title: "First outreach", workType: "branding", portfolioLink: "", text: "Hi [Name],\n\nI loved your recent [detail] — the way you handled it really stayed with me. I'm a visual designer focused on branding, editorial, and social, and I kept thinking about how your work and mine might fit together.\n\nIf you're open to it, I'd love to share a few relevant pieces. No pressure at all — I just admired the work and wanted to say hello.\n\nWarmly" },
-  { id: "follow-up", title: "Polite follow-up", workType: "", portfolioLink: "", text: "Hi [Name],\n\nJust floating my last message back up — no pressure at all. I know inboxes get busy.\n\nIf it's helpful, I can share a quick idea or a relevant piece for [detail]. And if now isn't the right time, that's completely fine too.\n\nWarmly" },
-  { id: "thank-you", title: "Thank you / after collab", workType: "collaboration", portfolioLink: "", text: "Hi [Name],\n\nThank you for the conversation — I really enjoyed [detail] and working through it with you.\n\nIf anything comes up down the line, I'm happy to help. Let's stay in touch.\n\nWarmly" },
-];
-type ModalState = { mode: "add" } | { mode: "edit"; contact: Contact } | null;
-// --- Supabase: per-user cloud storage ---
-// Each user has their own rows. RLS in Supabase ensures a user can only see their own data.
 async function api(action: string, args: Record<string, unknown>) {
-  if (!isSupabaseConfigured) throw new Error("Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel.");
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Please sign in to see your contacts.");
+  if (!isSupabaseConfigured) throw new Error("Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel.");
+  const { data: { user } } = await supabase.auth.getUser(); if (!user) throw new Error("Please sign in to see your contacts.");
   if (action === "records.list") {
-    if (args.collection === "outreach-contacts") {
-      const { data, error } = await supabase.from("outreach_contacts").select("id, value").eq("user_id", user.id).order("created_at", { ascending: false }).limit(1000);
-      if (error) throw error;
-      const records = (data || []).map((r: any) => ({ id: r.id, value: r.value as ContactValue }));
-      return { records, next_cursor: undefined };
-    }
-    if (args.collection === "outreach-settings") {
-      const { data, error } = await supabase.from("outreach_settings").select("id, value").eq("user_id", user.id).limit(1).maybeSingle();
-      if (error) throw error;
-      return { records: data ? [{ id: data.id, value: data.value }] : [] };
-    }
+    if (args.collection === "outreach-contacts") { const { data, error } = await supabase.from("outreach_contacts").select("id, value").eq("user_id", user.id).order("created_at", { ascending: false }).limit(1000); if (error) throw error; return { records: (data || []).map((r: any) => ({ id: r.id, value: r.value })) }; }
+    if (args.collection === "outreach-settings") { const { data, error } = await supabase.from("outreach_settings").select("id, value").eq("user_id", user.id).limit(1).maybeSingle(); if (error) throw error; return { records: data ? [{ id: data.id, value: data.value }] : [] }; }
     return { records: [] };
   }
   if (action === "records.create") {
-    if (args.collection === "outreach-contacts") {
-      const { data, error } = await supabase.from("outreach_contacts").insert({ user_id: user.id, value: args.value }).select("id").single();
-      if (error) throw error;
-      return { id: data.id };
-    }
-    if (args.collection === "outreach-settings") {
-      const { data, error } = await supabase.from("outreach_settings").insert({ user_id: user.id, value: args.value }).select("id").single();
-      if (error) throw error;
-      return { id: data.id };
-    }
+    if (args.collection === "outreach-contacts") { const { data, error } = await supabase.from("outreach_contacts").insert({ user_id: user.id, value: args.value }).select("id").single(); if (error) throw error; return { id: data.id }; }
+    if (args.collection === "outreach-settings") { const { data, error } = await supabase.from("outreach_settings").insert({ user_id: user.id, value: args.value }).select("id").single(); if (error) throw error; return { id: data.id }; }
     return { id: uid() };
   }
   if (action === "records.replace") {
-    if (args.collection === "outreach-contacts") {
-      const { error } = await supabase.from("outreach_contacts").update({ value: args.value }).eq("id", args.id).eq("user_id", user.id);
-      if (error) throw error;
-      return {};
-    }
-    if (args.collection === "outreach-settings") {
-      const { error } = await supabase.from("outreach_settings").update({ value: args.value }).eq("id", args.id).eq("user_id", user.id);
-      if (error) throw error;
-      return {};
-    }
-    return {};
-  }
-  if (action === "records.delete") {
-    if (args.collection === "outreach-contacts") {
-      const { error } = await supabase.from("outreach_contacts").delete().eq("id", args.id).eq("user_id", user.id);
-      if (error) throw error;
-      return {};
-    }
+    if (args.collection === "outreach-contacts") { const { error } = await supabase.from("outreach_contacts").update({ value: args.value }).eq("id", args.id).eq("user_id", user.id); if (error) throw error; return {}; }
+    if (args.collection === "outreach-settings") { const { error } = await supabase.from("outreach_settings").update({ value: args.value }).eq("id", args.id).eq("user_id", user.id); if (error) throw error; return {}; }
     return {};
   }
   throw new Error(`Unknown action ${action}`);
 }
-function uid() { return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
-function todayISO() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
-function formatDate(v: string) {
-  if (!v) return "—";
-  const d = new Date(`${v}T12:00:00`);
-  if (Number.isNaN(d.getTime())) return v;
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
-function formatTime(d: Date) { return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }); }
-function isEmailValue(v: string) { return /^[^\s@/]+@[^\s@]+\.[^\s@]+$/.test(v.trim()); }
-function isPhoneLike(v: string) { const digits = v.replace(/\D/g, ""); return digits.length >= 7 && /^\+?[\d\s().-]+$/.test(v.trim()); }
-function channelKind(channel: string): string {
-  const s = (channel || "").trim().toLowerCase();
-  if (!s) return "";
-  if (s.includes("insta") || s === "ig") return "instagram";
-  if (s.includes("twitter") || s === "x" || s.includes("tweet")) return "x";
-  if (s.includes("tiktok") || s.includes("tik tok") || s === "tt") return "tiktok";
-  if (s.includes("youtube") || s === "yt" || s.includes("you tube")) return "youtube";
-  if (s.includes("linkedin") || s.includes("linked") || s === "li") return "linkedin";
-  if (s.includes("behance")) return "behance";
-  if (s.includes("dribbble") || s.includes("dribble")) return "dribbble";
-  if (s.includes("pinterest") || s === "pin" || s.includes("pinboard")) return "pinterest";
-  if (s.includes("whatsapp") || s === "wa" || s.includes("whats app")) return "whatsapp";
-  if (s.includes("telegram") || s === "tg") return "telegram";
-  if (s.includes("facebook") || s === "fb" || s.includes("meta")) return "facebook";
-  if (s.includes("threads")) return "threads";
-  if (s.includes("snapchat") || s.includes("snap")) return "snapchat";
-  if (s.includes("signal")) return "signal";
-  if (s.includes("email") || s.includes("e-mail") || s === "mail") return "email";
-  if (s.includes("website") || s.includes("portfolio") || s.includes("studio") || s === "web" || s.includes("site")) return "website";
-  return "unknown";
-}
-function cleanNoSchemeUrl(s: string): string {
-  const idx = s.indexOf("/");
-  if (idx === -1) return s;
-  const domain = s.slice(0, idx);
-  const rest = s.slice(idx + 1);
-  if (rest.startsWith("@")) {
-    const dl = domain.toLowerCase();
-    if (dl.includes("tiktok") || dl.includes("youtube")) return s;
-    return `${domain}/${rest.slice(1)}`;
+
+function normalizeContactValue(v: any): ContactValue {
+  const rawStage = typeof v?.stage === "string" ? v.stage : "";
+  let stage: Stage = "to-reach";
+  if (["to-reach", "pitched", "in-conversation", "follow-up", "won"].includes(rawStage)) stage = rawStage;
+  else if (rawStage === "paused" || rawStage === "archived") stage = "to-reach";
+  else if (v?.followedUp) stage = "follow-up";
+  else if (v?.replied) stage = "in-conversation";
+  const now = new Date().toISOString();
+  const thread: ThreadEntry[] = Array.isArray(v?.thread) && v.thread.length ? v.thread.map((e: any) => ({ id: String(e.id || uid()), kind: (["created", "why", "sent", "next", "stage", "note", "win"].includes(e.kind) ? e.kind : "note") as ThreadKind, text: String(e.text || ""), link: String(e.link || ""), createdAt: String(e.createdAt || now) })) : [];
+  if (!thread.length) {
+    thread.push({ id: uid(), kind: "created", text: `Added to To-Reach`, createdAt: String(v?.createdAt || now) });
+    if (v?.whyThem) thread.push({ id: uid(), kind: "why", text: String(v.whyThem), createdAt: String(v?.createdAt || now) });
+    if (v?.whatSent) thread.push({ id: uid(), kind: "sent", text: String(v.whatSent), createdAt: String(v?.updatedAt || now) });
+    if (v?.nextStep) thread.push({ id: uid(), kind: "next", text: String(v.nextStep), createdAt: String(v?.updatedAt || now) });
+    if (v?.notes) thread.push({ id: uid(), kind: "note", text: String(v.notes), createdAt: String(v?.updatedAt || now) });
+    const winText = v?.winNote || v?.testimonial || ""; if (winText) thread.push({ id: uid(), kind: "win", text: String(winText), createdAt: String(v?.updatedAt || now) });
   }
-  return s;
+  return {
+    name: typeof v?.name === "string" ? v.name : "", channel: typeof v?.channel === "string" ? v.channel : "", outreachDate: typeof v?.outreachDate === "string" ? v.outreachDate : todayISO(),
+    contactDetails: typeof v?.contactDetails === "string" ? v.contactDetails : "", link: typeof v?.link === "string" ? v.link : "", notes: typeof v?.notes === "string" ? v.notes : "",
+    createdAt: typeof v?.createdAt === "string" ? v.createdAt : now, updatedAt: typeof v?.updatedAt === "string" ? v.updatedAt : now, stage,
+    whyThem: typeof v?.whyThem === "string" ? v.whyThem : "", whatSent: typeof v?.whatSent === "string" ? v.whatSent : "", nextStep: typeof v?.nextStep === "string" ? v.nextStep : "",
+    workType: (["branding", "editorial", "social", "collaboration"].includes(v?.workType) ? v.workType : "") as WorkType,
+    followUpDate: typeof v?.followUpDate === "string" ? v.followUpDate : "", featuredLink: typeof v?.featuredLink === "string" ? v.featuredLink : "",
+    winNote: typeof v?.winNote === "string" ? v.winNote : (typeof v?.testimonial === "string" ? v.testimonial : ""), referredBy: typeof v?.referredBy === "string" ? v.referredBy : (typeof v?.referredById === "string" ? v.referredById : ""), deletedAt: typeof v?.deletedAt === "string" ? v.deletedAt : "", thread,
+  };
 }
-function cleanSchemeUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    const host = u.hostname.toLowerCase();
-    if (!(host.includes("tiktok") || host.includes("youtube")) && u.pathname.startsWith("/@")) {
-      u.pathname = "/" + u.pathname.slice(2);
-    }
-    if (u.pathname === "/") return `${u.protocol}//${u.host}`;
-    return u.href.replace(/\/$/, "");
-  } catch {
-    const dl = url.toLowerCase();
-    if (dl.includes("tiktok") || dl.includes("youtube")) return url;
-    return url.replace(/\/@/, "/");
-  }
-}
-function buildFromHandle(rawHandle: string, channel: string): string {
-  const original = (rawHandle || "").trim();
-  if (!original) return "";
-  if (original.includes("/") && original.includes(".")) {
-    const c = cleanNoSchemeUrl(original.replace(/^@+/, ""));
-    return `https://${c}`;
-  }
-  if (isEmailValue(original)) return `mailto:${original}`;
-  if (isPhoneLike(original)) {
-    const kind0 = channelKind(channel);
-    if (kind0 === "whatsapp") { const d = original.replace(/\D/g, ""); return d ? `https://wa.me/${d}` : ""; }
-    return "";
-  }
-  const handle = original.replace(/^@+/, "").replace(/\//g, "").replace(/\s+/g, "");
-  if (!handle) return "";
-  const kind = channelKind(channel);
-  switch (kind) {
-    case "instagram": return `https://instagram.com/${handle}`;
-    case "x": return `https://x.com/${handle}`;
-    case "tiktok": return `https://tiktok.com/@${handle}`;
-    case "youtube": return `https://youtube.com/@${handle}`;
-    case "linkedin": return `https://linkedin.com/in/${handle}`;
-    case "behance": return `https://behance.net/${handle}`;
-    case "dribbble": return `https://dribbble.com/${handle}`;
-    case "pinterest": return `https://pinterest.com/${handle}`;
-    case "whatsapp": { const d = handle.replace(/\D/g, ""); return d ? `https://wa.me/${d}` : ""; }
-    case "telegram": return `https://t.me/${handle}`;
-    case "facebook": return `https://facebook.com/${handle}`;
-    case "threads": return `https://threads.net/@${handle}`;
-    case "snapchat": return `https://snapchat.com/add/${handle}`;
-    case "signal": return "";
-    case "email": return `mailto:${handle}`;
-    case "website": {
-      if (isEmailValue(handle)) return `mailto:${handle}`;
-      return `https://${handle}`;
-    }
-    default: return "";
-  }
-}
-function normalizeLink(rawLink: string, channel: string, contactDetails: string): string {
-  const raw = (rawLink || "").trim();
-  const ch = (channel || "").trim();
-  const det = (contactDetails || "").trim();
-  if (!raw) {
-    if (!det || !ch) return "";
-    return buildFromHandle(det, ch);
-  }
-  const lower = raw.toLowerCase();
-  if (lower.startsWith("mailto:") || lower.startsWith("tel:")) return raw;
-  if (isEmailValue(raw)) return `mailto:${raw}`;
-  if (/^https?:\/\//i.test(raw)) return cleanSchemeUrl(raw);
-  if (!raw.includes(".") && !raw.includes("/") && !raw.includes(" ") && ch) {
-    const stripped = raw.replace(/^@+/, "");
-    const built = buildFromHandle(stripped, ch);
-    if (built) return built;
-    return raw;
-  }
-  if (raw.includes(" ")) return raw;
-  let cleaned = raw;
-  if (cleaned.startsWith("@") && cleaned.slice(1).includes(".")) cleaned = cleaned.slice(1);
-  cleaned = cleanNoSchemeUrl(cleaned);
-  return `https://${cleaned}`;
-}
-function displayLink(c: Contact) { return normalizeLink(c.value.link, c.value.channel, c.value.contactDetails); }
-function shortLinkText(url: string) {
-  if (url.startsWith("mailto:")) return url.slice(7);
-  try { const u = new URL(url); const path = u.pathname === "/" ? "" : u.pathname; return `${u.hostname}${path}`; } catch { return url; }
-}
-function looksLikeUrl(v: string) {
-  if (!v.trim()) return true;
-  try { const u = new URL(normalizeLink(v, "", "")); return !!u.hostname && u.hostname.includes("."); } catch { return false; }
-}
-function csvCell(v: string) { return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; }
-function useMedia(query: string) {
-  const [match, setMatch] = useState(() => typeof window !== "undefined" ? window.matchMedia(query).matches : false);
-  useEffect(() => {
-    const m = window.matchMedia(query);
-    const fn = () => setMatch(m.matches);
-    fn(); m.addEventListener("change", fn); return () => m.removeEventListener("change", fn);
-  }, [query]);
-  return match;
+function syncDerived(v: ContactValue): ContactValue {
+  const why = v.thread.find((e) => e.kind === "why")?.text || ""; const sent = v.thread.find((e) => e.kind === "sent")?.text || ""; const next = [...v.thread].reverse().find((e) => e.kind === "next")?.text || ""; const win = v.thread.find((e) => e.kind === "win")?.text || ""; const notes = v.thread.filter((e) => e.kind === "note").map((e) => e.text).join("\n");
+  return { ...v, whyThem: why, whatSent: sent, nextStep: next, winNote: win, notes, updatedAt: new Date().toISOString() };
 }
 
 export default function App() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [view, setView] = useState<View>("queue");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [prevId, setPrevId] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [settingsId, setSettingsId] = useState<string | null>(null);
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [scratchpad, setScratchpad] = useState("");
   const [templates, setTemplates] = useState<TemplateItem[]>(DEFAULT_TEMPLATES);
-  const [scratchpadSaving, setScratchpadSaving] = useState(false);
-  const [scratchpadSavedAt, setScratchpadSavedAt] = useState<string | null>(null);
-  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
-  const [quickNoteFocused, setQuickNoteFocused] = useState(false);
-  const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
-  const [templateDraft, setTemplateDraft] = useState("");
-  const [activeFocus, setActiveFocus] = useState<string | null>(null);
-  const [clearConfirm, setClearConfirm] = useState(false);
-  const [pendingClearScratchpad, setPendingClearScratchpad] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [minimized, setMinimized] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(400);
-  const [sheetPct, setSheetPct] = useState(88);
-  const [modal, setModal] = useState<ModalState>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-  // EXECUTED BLUEPRINT: Paste-to-Contact, Today's 3, Win Loop, Undo Delete
-  const [pasteText, setPasteText] = useState("");
-  const [winModal, setWinModal] = useState(false);
-  const [winContact, setWinContact] = useState<Contact | null>(null);
-  const [winNote, setWinNote] = useState("");
-  const [winReferral, setWinReferral] = useState("");
-  const [pendingDelete, setPendingDelete] = useState<{ contact: Contact; timer: number } | null>(null);
-  const [todayDone, setTodayDone] = useState<string[]>([]);
-  const [streak, setStreak] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [notesDraft, setNotesDraft] = useState("");
-  const [notesSavedAt, setNotesSavedAt] = useState<string | null>(null);
-  const [notesSaving, setNotesSaving] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
-  const [prevContact, setPrevContact] = useState<{ id: string; name: string } | null>(null);
-  const [backStack, setBackStack] = useState<{ id: string; name: string }[]>([]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"profile" | "shortcuts" | "account">("profile");
   const [profile, setProfile] = useState<ProfileValue>(DEFAULT_PROFILE);
   const [profileDraft, setProfileDraft] = useState<ProfileValue>(DEFAULT_PROFILE);
-  const [avatarUploading, setAvatarUploading] = useState(false);
-  const avatarInputRef = useRef<HTMLInputElement | null>(null);
-  const [shortcuts, setShortcuts] = useState<ShortcutMap>({ ...DEFAULT_SHORTCUTS });
-  const [capturing, setCapturing] = useState<ShortcutAction | null>(null);
-  // --- Auth (Option B: per-user) ---
+  const [pasteText, setPasteText] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [entryDraft, setEntryDraft] = useState("");
+  const [entryError, setEntryError] = useState<string | null>(null);
+  const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
+  const [selectedProofId, setSelectedProofId] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [winDraft, setWinDraft] = useState("");
+  const [winReferral, setWinReferral] = useState("");
+  const [pendingArchive, setPendingArchive] = useState<{ contact: Contact; timer: number } | null>(null);
+  const [showDeleteAll, setShowDeleteAll] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [deleteAllBusy, setDeleteAllBusy] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState("");
-  const [authSent, setAuthSent] = useState(false);
+  const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
-  const [authTab, setAuthTab] = useState<"signin" | "signup">("signin");
-  const [authMethod, setAuthMethod] = useState<"password" | "magic">("password");
+  const [authSent, setAuthSent] = useState(false);
+  const [authMode, setAuthMode] = useState<"magic" | "password" | "forgot" | "recovery">("magic");
+  const [authIsSignup, setAuthIsSignup] = useState(false);
   const [authName, setAuthName] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
-  const [authShowPassword, setAuthShowPassword] = useState(false);
-  const [authShowConfirm, setAuthShowConfirm] = useState(false);
-  const [authAgree, setAuthAgree] = useState(false);
-  const [authForgotMode, setAuthForgotMode] = useState(false);
-  const [authForgotSent, setAuthForgotSent] = useState(false);
-  const [authNeedsConfirm, setAuthNeedsConfirm] = useState(false);
-  const [authRecoveryMode, setAuthRecoveryMode] = useState(false);
   const [authNewPassword, setAuthNewPassword] = useState("");
-  const [authNewConfirm, setAuthNewConfirm] = useState("");
-  const [showDeleteAll, setShowDeleteAll] = useState(false);
-  const [deleteAllBusy, setDeleteAllBusy] = useState(false);
-  const isMobile = useMedia("(max-width: 767px)");
-  const isTablet = useMedia("(min-width: 768px) and (max-width: 1023px)");
-  const isDesktop = useMedia("(min-width: 1024px)");
-  const notesTimer = useRef<number | null>(null);
-  const scratchpadTimer = useRef<number | null>(null);
-  const scratchpadRef = useRef("");
-  const templatesRef = useRef<TemplateItem[]>(DEFAULT_TEMPLATES);
-  const profileRef = useRef<ProfileValue>(DEFAULT_PROFILE);
-  const shortcutsRef = useRef<ShortcutMap>({ ...DEFAULT_SHORTCUTS });
+  const [contactDetailDraft, setContactDetailDraft] = useState("");
+  const [contactLinkDraft, setContactLinkDraft] = useState("");
+
   const searchRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => { scratchpadRef.current = scratchpad; }, [scratchpad]);
-  useEffect(() => { templatesRef.current = templates; }, [templates]);
-  useEffect(() => { profileRef.current = profile; }, [profile]);
-  useEffect(() => { shortcutsRef.current = shortcuts; }, [shortcuts]);
-  const notesFor = useRef<string | null>(null);
+  const captureRef = useRef<HTMLInputElement | null>(null);
+  const paletteRef = useRef<HTMLInputElement | null>(null);
   const toastTimer = useRef<number | null>(null);
-  const formRef = useRef<HTMLDivElement>(null);
+  const isDesktop = typeof window !== "undefined" ? window.matchMedia("(min-width: 1024px)").matches : true;
+  const [isDesktopState, setIsDesktopState] = useState(isDesktop);
+  useEffect(() => { const m = window.matchMedia("(min-width: 1024px)"); const fn = () => setIsDesktopState(m.matches); fn(); m.addEventListener("change", fn); return () => m.removeEventListener("change", fn); }, []);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 3200);
-  };
+  const showToast = (msg: string) => { setToast(msg); if (toastTimer.current) window.clearTimeout(toastTimer.current); toastTimer.current = window.setTimeout(() => setToast(null), 3200); };
 
-  // --- Auth effects ---
   useEffect(() => {
     if (!isSupabaseConfigured) { setAuthLoading(false); return; }
     supabase.auth.getSession().then(({ data }) => { setUser(data.session?.user ?? null); setAuthLoading(false); });
-    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => { setUser(session?.user ?? null); setAuthLoading(false); if (event === "PASSWORD_RECOVERY") setAuthRecoveryMode(true); });
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => { setUser(session?.user ?? null); setAuthLoading(false); if (event === "PASSWORD_RECOVERY") setAuthMode("recovery"); });
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  const friendlyAuthError = (msg: string) => {
-    const m = (msg || "").toLowerCase();
-    if (m.includes("invalid login credentials") || m.includes("invalid email or password")) return "Incorrect email or password. Try again, or use Forgot password.";
-    if (m.includes("user already registered") || m.includes("already registered") || m.includes("already exists")) return "This email already has an account. Switch to Sign in.";
-    if (m.includes("password should be at least")) return "Password must be at least 8 characters.";
-    if (m.includes("email link is invalid") || m.includes("expired")) return "That link expired or was already used. Request a new one.";
-    if (m.includes("provider is not enabled") || m.includes("unsupported provider")) return "This provider is not enabled yet in Supabase. Enable it in Authentication > Providers, then try again.";
-    if (m.includes("too many requests") || m.includes("rate limit") || m.includes("email rate limit")) return "Too many attempts. Wait a few minutes, then try again.";
-    if (m.includes("email not confirmed")) return "Check your inbox to confirm your email first, then sign in.";
-    return msg;
-  };
-  const passwordScore = (pw: string) => {
-    let s = 0;
-    if (pw.length >= 8) s++;
-    if (pw.length >= 12) s++;
-    if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) s++;
-    if (/\d/.test(pw)) s++;
-    if (/[^A-Za-z0-9]/.test(pw)) s++;
-    return s;
-  };
-  const passwordLabel = (pw: string) => {
-    if (!pw) return "";
-    const s = passwordScore(pw);
-    if (s <= 1) return "Weak";
-    if (s <= 3) return "Medium";
-    return "Strong";
-  };
-  const handleSendMagicLink = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; }
-    setAuthBusy(true); setAuthError(null);
-    const { error } = await supabase.auth.signInWithOtp({ email: authEmail.trim(), options: { emailRedirectTo: window.location.origin } });
-    setAuthBusy(false);
-    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
-    setAuthSent(true);
-  };
-  const handleOAuth = async (provider: "google" | "github" | "apple") => {
-    setAuthBusy(true); setAuthError(null);
-    const { error } = await supabase.auth.signInWithOAuth({ provider, options: { redirectTo: window.location.origin, queryParams: provider === "google" ? { access_type: "offline", prompt: "consent" } : undefined } });
-    if (error) { setAuthError(friendlyAuthError(error.message)); setAuthBusy(false); }
-  };
-  const handleGoogleSignIn = async () => handleOAuth("google");
-  const handleSignUpPassword = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!authName.trim()) { setAuthError("Please enter your name."); return; }
-    if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; }
-    if (authPassword.length < 8) { setAuthError("Password must be at least 8 characters."); return; }
-    if (authPassword !== authConfirmPassword) { setAuthError("Passwords do not match."); return; }
-    if (!authAgree) { setAuthError("Please accept the terms to create your account."); return; }
-    setAuthBusy(true); setAuthError(null);
-    const { data, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword, options: { data: { full_name: authName.trim() }, emailRedirectTo: window.location.origin } });
-    setAuthBusy(false);
-    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
-    if (data.user && !data.session) { setAuthNeedsConfirm(true); return; }
-    setAuthNeedsConfirm(false);
-  };
-  const handleSignInPassword = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; }
-    if (!authPassword) { setAuthError("Please enter your password."); return; }
-    setAuthBusy(true); setAuthError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
-    setAuthBusy(false);
-    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
-  };
-  const handleForgotPassword = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email to reset your password."); return; }
-    setAuthBusy(true); setAuthError(null);
-    const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), { redirectTo: window.location.origin });
-    setAuthBusy(false);
-    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
-    setAuthForgotSent(true);
-  };
-  const handleUpdatePasswordRecovery = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (authNewPassword.length < 8) { setAuthError("Password must be at least 8 characters."); return; }
-    if (authNewPassword !== authNewConfirm) { setAuthError("Passwords do not match."); return; }
-    setAuthBusy(true); setAuthError(null);
-    const { error } = await supabase.auth.updateUser({ password: authNewPassword });
-    setAuthBusy(false);
-    if (error) { setAuthError(friendlyAuthError(error.message)); return; }
-    setAuthRecoveryMode(false); setAuthNewPassword(""); setAuthNewConfirm(""); showToast("Password updated");
-  };
-  const handleResendConfirm = async () => {
-    if (!authEmail.trim()) return;
-    setAuthBusy(true); setAuthError(null);
-    const { error } = await supabase.auth.resend({ type: "signup", email: authEmail.trim() });
-    setAuthBusy(false);
-    if (error) setAuthError(friendlyAuthError(error.message));
-    else setAuthError(null);
-  };
-  const handleSignOut = async () => { setSettingsOpen(false); await supabase.auth.signOut(); setContacts([]); setSelectedId(null); setPanelOpen(false); };
-  const handleDeleteAllMyData = async () => {
-    if (!user) return; setDeleteAllBusy(true);
-    try {
-      const { error: cErr } = await supabase.from("outreach_contacts").delete().eq("user_id", user.id);
-      if (cErr) throw cErr;
-      const { error: sErr } = await supabase.from("outreach_settings").delete().eq("user_id", user.id);
-      if (sErr) throw sErr;
-      try { const { data: files } = await supabase.storage.from("avatars").list(user.id); if (files && files.length > 0) { await supabase.storage.from("avatars").remove(files.map(f => `${user.id}/${f.name}`)); } } catch { /* avatar delete is best-effort */ }
-      setContacts([]); setSelectedId(null); setPanelOpen(false); setScratchpad(""); setTemplates(DEFAULT_TEMPLATES); setProfile(DEFAULT_PROFILE);
-      setShowDeleteAll(false); showToast("All your data was deleted");
-    } catch (e) { showToast(e instanceof Error ? e.message : "Could not delete data"); }
-    finally { setDeleteAllBusy(false); }
-  };
-
-  const reloadContacts = useCallback(async () => {
-    const out: Contact[] = [];
-    let cursor: string | undefined;
-    for (let i = 0; i < 12; i++) {
-      const data = await api("records.list", { collection: "outreach-contacts", limit: 100, ...(cursor ? { cursor } : {}) }) as { records: { id: string; value: any }[]; next_cursor?: string };
-      out.push(...(data.records || []).map(r => ({ id: r.id, value: normalizeContactValue(r.value) })));
-      cursor = data.next_cursor;
-      if (!cursor) break;
-    }
-    setContacts(out);
-    return out;
-  }, []);
-
-  const loadAll = useCallback(async () => {
-    setLoading(true); setLoadError(null);
-    try {
-      const list = await reloadContacts();
-      try {
-        const s = await api("records.list", { collection: "outreach-settings", limit: 10 }) as { records: { id: string; value: { themeMode?: ThemeMode; selectedId?: string | null; scratchpad?: string; templates?: TemplateItem[]; profile?: ProfileValue; shortcuts?: Partial<ShortcutMap> } }[] };
-        const first = s.records?.[0];
-        if (first) {
-          setSettingsId(first.id);
-          if (first.value.themeMode) setThemeMode(first.value.themeMode);
-          if (typeof first.value.scratchpad === "string") { setScratchpad(first.value.scratchpad); scratchpadRef.current = first.value.scratchpad; }
-          if (Array.isArray(first.value.templates) && first.value.templates.length > 0) { const norm = first.value.templates.map((t: any) => ({ id: String(t.id || ""), title: String(t.title || ""), text: String(t.text || ""), workType: (WORK_TYPES.some(w => w.value === t.workType) ? t.workType : "") as WorkType, portfolioLink: typeof t.portfolioLink === "string" ? t.portfolioLink : "" })); setTemplates(norm); templatesRef.current = norm; }
-          if (first.value.profile && typeof first.value.profile === "object") {
-            const metaName = typeof (user as { user_metadata?: { full_name?: unknown } } | null)?.user_metadata?.full_name === "string" ? (user as { user_metadata: { full_name: string } }).user_metadata.full_name : "";
-            const p: ProfileValue = normalizeProfileValue(first.value.profile, metaName);
-            if (!p.name && metaName) p.name = metaName;
-            setProfile(p); profileRef.current = p; setProfileDraft(p);
-          }
-          if (first.value.shortcuts && typeof first.value.shortcuts === "object") {
-            const merged: ShortcutMap = { ...DEFAULT_SHORTCUTS };
-            (Object.keys(DEFAULT_SHORTCUTS) as ShortcutAction[]).forEach(k => { const v = (first.value.shortcuts as Partial<ShortcutMap>)[k]; if (typeof v === "string" && v) merged[k] = v; });
-            setShortcuts(merged); shortcutsRef.current = merged;
-          }
-          const sel = first.value.selectedId || null;
-          if (sel && list.some(c => c.id === sel)) { setSelectedId(sel); setPanelOpen(true); }
-        }
-      } catch { /* settings are best-effort; contacts already loaded */ }
-      setSettingsLoaded(true);
-    } catch (e) { setLoadError(e instanceof Error ? e.message : String(e)); setSettingsLoaded(true); }
-    finally { setLoading(false); }
-  }, [reloadContacts]);
-
-  useEffect(() => { if (user) loadAll(); }, [user, loadAll]);
-
-  useEffect(() => { document.title = "Reach — Outreach, curated."; }, []);
-
-  const resolvedTheme = useMemo(() => {
-    if (themeMode !== "system") return themeMode;
-    if (typeof window === "undefined") return "light";
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  useEffect(() => {
+    const root = document.documentElement; const apply = () => { if (themeMode === "system") { const dark = window.matchMedia("(prefers-color-scheme: dark)").matches; root.setAttribute("data-theme", dark ? "dark" : "light"); } else root.setAttribute("data-theme", themeMode); };
+    apply(); const m = window.matchMedia("(prefers-color-scheme: dark)"); m.addEventListener("change", apply); return () => m.removeEventListener("change", apply);
   }, [themeMode]);
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = resolvedTheme;
-    document.documentElement.style.colorScheme = resolvedTheme;
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const fn = () => { if (themeMode === "system") { document.documentElement.dataset.theme = mq.matches ? "dark" : "light"; } };
-    mq.addEventListener("change", fn); return () => mq.removeEventListener("change", fn);
-  }, [resolvedTheme, themeMode]);
-
-  const saveSettings = useCallback(async (nextTheme: ThemeMode, nextSelected: string | null) => {
-    if (!settingsLoaded) return;
+  const loadAll = async () => {
+    setLoading(true); setLoadError(null);
     try {
-      const value = { themeMode: nextTheme, selectedId: nextSelected, scratchpad: scratchpadRef.current, templates: templatesRef.current, profile: profileRef.current, shortcuts: shortcutsRef.current };
-      if (settingsId) await api("records.replace", { collection: "outreach-settings", id: settingsId, value });
-      else {
-        const created = await api("records.create", { collection: "outreach-settings", value, idempotency_key: `settings-${uid()}` }) as { id: string };
-        setSettingsId(created.id);
-      }
-    } catch { /* theme/selection persistence is best-effort; contacts remain authoritative */ }
-  }, [settingsId, settingsLoaded]);
-
-  const changeTheme = (m: ThemeMode) => { setThemeMode(m); saveSettings(m, selectedId); };
-  const cycleTheme = () => { const order: ThemeMode[] = ["system", "light", "dark"]; const next = order[(order.indexOf(themeMode) + 1) % order.length]; changeTheme(next); };
-  const selectContact = (id: string | null, opts?: { fromBack?: boolean }) => {
-    if (id && selectedId && id !== selectedId && !opts?.fromBack) {
-      const prev = contacts.find(c => c.id === selectedId);
-      if (prev) {
-        const entry = { id: prev.id, name: prev.value.name };
-        setBackStack(prevStack => [...prevStack.slice(-1), entry]);
-        setPrevContact(entry);
-      }
-    }
-    setSelectedId(id); setPanelOpen(!!id);
-    if (!isDesktop) setMinimized(false);
-    if (id && isMobile) setSheetPct(88);
-    saveSettings(themeMode, id);
+      const list = await api("records.list", { collection: "outreach-contacts" }) as { records: { id: string; value: any }[] };
+      const mapped = (list.records || []).map((r) => ({ id: r.id, value: normalizeContactValue(r.value) }));
+      setContacts(mapped);
+      const s = await api("records.list", { collection: "outreach-settings" }) as { records: { id: string; value: any }[] };
+      const first = s.records?.[0]; if (first) { setSettingsId(first.id); if (first.value.themeMode) setThemeMode(first.value.themeMode); if (Array.isArray(first.value.templates) && first.value.templates.length) setTemplates(first.value.templates.map((t: any) => ({ id: String(t.id), title: String(t.title), text: String(t.text) }))); if (first.value.profile) setProfile({ name: String(first.value.profile.name || ""), whatIDo: String(first.value.profile.whatIDo || ""), openFor: String(first.value.profile.openFor || "") }); if (first.value.selectedId) setSelectedId(first.value.selectedId); }
+    } catch (e) { setLoadError(e instanceof Error ? e.message : "Could not load contacts."); } finally { setLoading(false); }
   };
-  const goBack = () => {
-    if (backStack.length === 0) return;
-    const last = backStack[backStack.length - 1];
-    setBackStack(prev => prev.slice(0, -1));
-    selectContact(last.id, { fromBack: true });
+  useEffect(() => { if (user) loadAll(); }, [user]);
+
+  const saveSettings = async (nextTheme = themeMode, nextTemplates = templates, nextProfile = profile, nextSelected = selectedId) => {
+    const value = { themeMode: nextTheme, templates: nextTemplates, profile: nextProfile, selectedId: nextSelected };
+    if (settingsId) await api("records.replace", { collection: "outreach-settings", id: settingsId, value });
+    else { const created = await api("records.create", { collection: "outreach-settings", value }) as { id: string }; setSettingsId(created.id); }
+  };
+  const persistContact = async (contact: Contact, nextValue: ContactValue) => {
+    const synced = syncDerived(nextValue); setContacts((prev) => prev.map((c) => (c.id === contact.id ? { ...c, value: synced } : c)));
+    await api("records.replace", { collection: "outreach-contacts", id: contact.id, value: synced });
   };
 
-  const selected = useMemo(() => contacts.find(c => c.id === selectedId) || null, [contacts, selectedId]);
-  const selectedLink = selected ? displayLink(selected) : "";
+  const selected = useMemo(() => contacts.find((c) => c.id === selectedId && !c.value.deletedAt) || null, [contacts, selectedId]);
+  useEffect(() => { if (selected) { setContactDetailDraft(selected.value.contactDetails); setContactLinkDraft(selected.value.link); setWinDraft(selected.value.winNote); setEditingEntryId(null); setActiveTemplateId(null); } }, [selected?.id]);
 
-  useEffect(() => {
-    if (selected) { setNotesDraft(selected.value.notes || ""); notesFor.current = selected.id; setNotesSavedAt(null); }
-    else { setNotesDraft(""); notesFor.current = null; }
-  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const persistContact = async (contact: Contact, patch: Partial<ContactValue>) => {
-    const next: ContactValue = { ...contact.value, ...patch, updatedAt: new Date().toISOString() };
-    await api("records.replace", { collection: "outreach-contacts", id: contact.id, value: next });
-    setContacts(prev => prev.map(c => c.id === contact.id ? { ...c, value: next } : c));
-    return next;
-  };
-
-  const saveNotesNow = useCallback(async (text: string) => {
-    const id = notesFor.current; if (!id) return;
-    const cur = contacts.find(c => c.id === id); if (!cur) return;
-    if (cur.value.notes === text) return;
-    setNotesSaving(true);
-    try { await persistContact(cur, { notes: text }); setNotesSavedAt(formatTime(new Date())); }
-    catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t save notes"); }
-    finally { setNotesSaving(false); }
-  }, [contacts]); // eslint-disable-line
-
-  const onNotesChange = (text: string) => {
-    setNotesDraft(text);
-    if (notesTimer.current) window.clearTimeout(notesTimer.current);
-    notesTimer.current = window.setTimeout(() => { saveNotesNow(text); }, 400);
-  };
-
+  const today = todayISO();
+  const visible = useMemo(() => contacts.filter((c) => !c.value.deletedAt), [contacts]);
+  const counts = useMemo(() => ({ total: visible.length, due: visible.filter((c) => isFollowUpDue(c.value, today)).length, toReach: visible.filter((c) => c.value.stage === "to-reach").length, inConversation: visible.filter((c) => c.value.stage === "in-conversation").length, won: visible.filter((c) => c.value.stage === "won").length }), [visible, today]);
+  const queue = useMemo(() => {
+    const notSnoozed = (c: Contact) => !c.value.followUpDate || c.value.followUpDate <= today;
+    const due = visible.filter((c) => isFollowUpDue(c.value, today)).sort((a, b) => (a.value.followUpDate || a.value.outreachDate).localeCompare(b.value.followUpDate || b.value.outreachDate));
+    const toReach = visible.filter((c) => c.value.stage === "to-reach" && notSnoozed(c)).sort((a, b) => a.value.createdAt.localeCompare(b.value.createdAt));
+    const convo = visible.filter((c) => c.value.stage === "in-conversation" && notSnoozed(c)).sort((a, b) => a.value.updatedAt.localeCompare(b.value.updatedAt));
+    const pitched = visible.filter((c) => c.value.stage === "pitched" && notSnoozed(c)).sort((a, b) => a.value.updatedAt.localeCompare(b.value.updatedAt));
+    return [...due, ...toReach, ...convo, ...pitched].filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+  }, [visible, today]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const today = todayISO();
-    const daysSince = (d: string) => { if (!d) return -1; const then = new Date(`${d}T12:00:00`).getTime(); const now = new Date(`${today}T12:00:00`).getTime(); return Math.floor((now - then) / 86400000); };
-    const list = contacts.filter(c => {
-      const stage = c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp);
-      if (filter === "to-reach" && stage !== "to-reach") return false;
-      if (filter === "replied" && !["in-conversation", "won"].includes(stage)) return false;
-      if (filter === "followed" && stage !== "follow-up") return false;
-      if (filter === "today" && c.value.followUpDate !== today && c.value.outreachDate !== today) return false;
-      if (filter === "needs-follow-up" && !isFollowUpDue(c.value, today)) return false;
-      if (!q) return true;
-      // Search now includes Notes + Follow-up Date. If match is in Notes, row shows "In notes" chip.
-      return [c.value.name, c.value.channel, c.value.contactDetails, c.value.link, c.value.whyThem, c.value.whatSent, c.value.nextStep, c.value.workType, c.value.notes, c.value.followUpDate].some(v => (v || "").toLowerCase().includes(q));
-    });
-    return [...list].sort((a, b) => {
-      if (filter === "needs-follow-up") {
-        const ad = a.value.outreachDate, bd = b.value.outreachDate;
-        if (ad && bd && ad !== bd) return ad.localeCompare(bd);
-      }
-      const ad = a.value.outreachDate, bd = b.value.outreachDate;
-      if (ad && bd && ad !== bd) return bd.localeCompare(ad);
-      if (ad && !bd) return -1; if (!ad && bd) return 1;
-      return b.value.updatedAt.localeCompare(a.value.updatedAt);
-    });
-  }, [contacts, search, filter]);
+    const list = visible.filter((c) => { if (filter === "to-reach" && c.value.stage !== "to-reach") return false; if (filter === "follow-up" && !isFollowUpDue(c.value, today) && c.value.stage !== "follow-up") return false; if (filter === "won" && c.value.stage !== "won") return false; if (!q) return true; return [c.value.name, c.value.channel, c.value.contactDetails, c.value.link, c.value.whyThem, c.value.whatSent, c.value.nextStep, c.value.notes, c.value.workType].some((v) => (v || "").toLowerCase().includes(q)); });
+    return [...list].sort((a, b) => b.value.updatedAt.localeCompare(a.value.updatedAt));
+  }, [visible, search, filter, today]);
+  const proofStack = useMemo(() => visible.filter((c) => c.value.stage === "won" && c.value.winNote).map((c) => ({ id: c.id, name: c.value.name, text: c.value.winNote, link: c.value.featuredLink || c.value.link })), [visible]);
 
-  const counts = useMemo(() => {
-    const today = todayISO();
-    const daysSince = (d: string) => { if (!d) return -1; const then = new Date(`${d}T12:00:00`).getTime(); const now = new Date(`${today}T12:00:00`).getTime(); return Math.floor((now - then) / 86400000); };
-    const followUpDue = contacts.filter(c => isFollowUpDue(c.value, today));
-    return { total: contacts.length, replied: contacts.filter(c => c.value.replied).length, followed: contacts.filter(c => c.value.followedUp).length, toReach: contacts.filter(c => (c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp)) === "to-reach").length, outreachToday: contacts.filter(c => c.value.outreachDate === today || c.value.followUpDate === today).length, needsFollowUp: followUpDue.length, inConversation: contacts.filter(c => (c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp)) === "in-conversation").length, followUpDueList: followUpDue };
-  }, [contacts]);
-
-  const exportCSV = () => {
-    const headers = ["name","channel","outreach date","contact","link","stage","work type","why them","what sent","next step","follow-up date","featured link","replied","followed up","notes"];
-    const rows = contacts.map(c => [c.value.name, c.value.channel, c.value.outreachDate, c.value.contactDetails, displayLink(c), stageLabel(c.value.stage), workTypeLabel(c.value.workType), c.value.whyThem || "", c.value.whatSent || "", c.value.nextStep || "", c.value.followUpDate || "", c.value.featuredLink || "", c.value.replied ? "Yes" : "No", c.value.followedUp ? "Yes" : "No", c.value.notes]);
-    const csv = "\uFEFF" + [headers, ...rows].map(r => r.map(csvCell).join(",")).join("\r\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `reach-${todayISO()}.csv`; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 800);
-    showToast(`Exported ${contacts.length} ${contacts.length === 1 ? "contact" : "contacts"}`);
-  };
-
-  const copyText = async (text: string, key: string) => {
+  const selectContact = (id: string | null) => { if (id && selectedId && id !== selectedId) setPrevId(selectedId); setSelectedId(id); if (id) saveSettings(themeMode, templates, profile, id).catch(() => {}); };
+  const handlePasteAdd = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault(); const raw = pasteText.trim(); if (!raw) return; setBusy(true);
     try {
-      if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); }
-      else { const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
-      setCopied(key); setTimeout(() => setCopied(null), 2000); showToast("Copied to clipboard");
-    } catch { showToast("Select the text to copy it"); }
+      const parsed = parsePasteToContact(raw);
+      const dup = contacts.find((c) => !c.value.deletedAt && c.value.name.toLowerCase() === parsed.name.toLowerCase());
+      if (dup) { selectContact(dup.id); showToast("You already have this contact. Opened it instead."); setPasteText(""); return; }
+      const value: ContactValue = { name: parsed.name || raw, channel: parsed.channel, outreachDate: today, contactDetails: parsed.contactDetails, link: parsed.link, notes: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), stage: "to-reach", whyThem: "", whatSent: "", nextStep: "", workType: "", followUpDate: "", featuredLink: "", winNote: "", referredBy: "", deletedAt: "", thread: [{ id: uid(), kind: "created", text: "Added to To-Reach", createdAt: new Date().toISOString() }] };
+      const created = await api("records.create", { collection: "outreach-contacts", value }) as { id: string };
+      setContacts((prev) => [{ id: created.id, value }, ...prev]); setPasteText(""); showToast(`Added to To-Reach: ${value.name}`); selectContact(created.id); setView("contacts");
+    } catch (err) { showToast(err instanceof Error ? err.message : "Could not add contact"); } finally { setBusy(false); }
   };
+  const markDone = async (contact: Contact) => {
+    let nextStage: Stage = contact.value.stage; let nextFollow: string = contact.value.followUpDate;
+    if (contact.value.stage === "to-reach") nextStage = "pitched"; else if (contact.value.stage === "pitched") nextStage = "in-conversation"; else if (contact.value.stage === "follow-up") { nextStage = "in-conversation"; nextFollow = ""; } else if (contact.value.stage === "in-conversation") { nextStage = "follow-up"; nextFollow = addDaysISO(4); }
+    const entry: ThreadEntry = { id: uid(), kind: "stage", text: `Marked done. Moved to ${stageLabel(nextStage)}`, createdAt: new Date().toISOString() };
+    await persistContact(contact, { ...contact.value, stage: nextStage, followUpDate: nextFollow, thread: [...contact.value.thread, entry] }); showToast("Done. Next up.");
+  };
+  const snooze = async (contact: Contact) => { const entry: ThreadEntry = { id: uid(), kind: "stage", text: "Snoozed 4 days", createdAt: new Date().toISOString() }; await persistContact(contact, { ...contact.value, followUpDate: addDaysISO(4), thread: [...contact.value.thread, entry] }); showToast("Snoozed 4 days."); };
+  const setStage = async (contact: Contact, stage: Stage) => {
+    const entry: ThreadEntry = { id: uid(), kind: "stage", text: `Moved to ${stageLabel(stage)}`, createdAt: new Date().toISOString() };
+    await persistContact(contact, { ...contact.value, stage, thread: [...contact.value.thread, entry] }); showToast(`Moved to ${stageLabel(stage)}`);
+    if (stage === "won") { setWinDraft(contact.value.winNote); setWinReferral(""); }
+  };
+  const addThreadEntry = (kind: ThreadKind) => { if (!selected) return; const entry: ThreadEntry = { id: uid(), kind, text: "", createdAt: new Date().toISOString() }; setContacts((prev) => prev.map((c) => (c.id === selected.id ? { ...c, value: { ...c.value, thread: [...c.value.thread, entry] } } : c))); setEditingEntryId(entry.id); setEntryDraft(""); setEntryError(null); };
+  const saveThreadEntry = async () => { if (!selected || !editingEntryId) return; if (!entryDraft.trim()) { setEntryError("Add 1 line to save."); return; } const nextThread = selected.value.thread.map((en) => (en.id === editingEntryId ? { ...en, text: entryDraft.trim() } : en)); await persistContact(selected, { ...selected.value, thread: nextThread }); setEditingEntryId(null); setEntryDraft(""); setEntryError(null); showToast("Saved"); };
+  const saveContactBasics = async () => { if (!selected) return; await persistContact(selected, { ...selected.value, contactDetails: contactDetailDraft.trim(), link: contactLinkDraft.trim() }); showToast("Saved"); };
+  const saveWin = async () => { if (!selected) return; if (!winDraft.trim()) { showToast("Add 1 line for What worked."); return; } const nextThread = selected.value.thread.filter((en) => en.kind !== "win"); nextThread.push({ id: uid(), kind: "win", text: winDraft.trim(), createdAt: new Date().toISOString() }); const featured = selected.value.featuredLink; await persistContact(selected, { ...selected.value, thread: nextThread, featuredLink: featured }); if (winReferral.trim()) { const parsed = parsePasteToContact(winReferral.trim()); const v: ContactValue = { name: parsed.name || winReferral.trim(), channel: parsed.channel, outreachDate: today, contactDetails: parsed.contactDetails, link: parsed.link, notes: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), stage: "to-reach", whyThem: "", whatSent: "", nextStep: "", workType: "", followUpDate: "", featuredLink: "", winNote: "", referredBy: selected.value.name, deletedAt: "", thread: [{ id: uid(), kind: "created", text: `Added via ${selected.value.name}`, createdAt: new Date().toISOString() }] }; const created = await api("records.create", { collection: "outreach-contacts", value: v }) as { id: string }; setContacts((prev) => [{ id: created.id, value: v }, ...prev]); } setWinReferral(""); showToast("Win saved to Proof Stack."); };
+  const archiveContact = async (contact: Contact) => { if (pendingArchive) window.clearTimeout(pendingArchive.timer); const timer = window.setTimeout(() => setPendingArchive(null), 5000); setPendingArchive({ contact, timer }); setContacts((prev) => prev.map((c) => (c.id === contact.id ? { ...c, value: { ...c.value, deletedAt: new Date().toISOString() } } : c))); if (selectedId === contact.id) setSelectedId(null); showToast(`Archived ${contact.value.name}.`); };
+  const undoArchive = async () => { if (!pendingArchive) return; const c = pendingArchive.contact; window.clearTimeout(pendingArchive.timer); setPendingArchive(null); setContacts((prev) => prev.map((x) => (x.id === c.id ? { ...x, value: { ...x.value, deletedAt: "" } } : x))); showToast("Restored."); };
+  const copyText = async (text: string, key: string) => { try { await navigator.clipboard.writeText(text); setCopiedKey(key); setTimeout(() => setCopiedKey(null), 2000); showToast("Copied to clipboard"); } catch { showToast("Select the text to copy it"); } };
+  const exportCSV = () => { const headers = ["name", "channel", "outreach date", "contact", "link", "stage", "work type", "why them", "what sent", "next step", "follow-up date", "featured link", "win note", "notes"]; const rows = contacts.filter((c) => !c.value.deletedAt).map((c) => [c.value.name, c.value.channel, c.value.outreachDate, c.value.contactDetails, c.value.link, stageLabel(c.value.stage), c.value.workType, c.value.whyThem, c.value.whatSent, c.value.nextStep, c.value.followUpDate, c.value.featuredLink, c.value.winNote, c.value.notes]); const csv = "\uFEFF" + [headers, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n"); const blob = new Blob([csv], { type: "text/csv;charset=utf-8" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `reach-${today}.csv`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 800); showToast(`Exported ${rows.length} contacts`); };
+  const saveProfile = async () => { const next = { name: profileDraft.name.trim(), whatIDo: profileDraft.whatIDo.trim(), openFor: profileDraft.openFor.trim() }; setProfile(next); await saveSettings(themeMode, templates, next, selectedId); setSettingsOpen(false); showToast("Profile saved."); };
+  const saveTemplate = async (id: string, text: string) => { const next = templates.map((t) => (t.id === id ? { ...t, text } : t)); setTemplates(next); await saveSettings(themeMode, next, profile, selectedId); showToast("Template saved"); };
+  const deleteAll = async () => { if (deleteConfirm !== "DELETE" || !user) return; setDeleteAllBusy(true); try { await supabase.from("outreach_contacts").delete().eq("user_id", user.id); await supabase.from("outreach_settings").delete().eq("user_id", user.id); setContacts([]); setSelectedId(null); setTemplates(DEFAULT_TEMPLATES); setProfile(DEFAULT_PROFILE); setShowDeleteAll(false); setDeleteConfirm(""); showToast("All your data was deleted"); } catch (e) { showToast("Could not delete data"); } finally { setDeleteAllBusy(false); } };
 
-  const toggleStatus = async (field: "replied" | "followedUp") => {
-    if (!selected) return;
-    try {
-      const nextVal = !selected.value[field];
-      const curStage = selected.value.stage || stageFromLegacy(selected.value.replied, selected.value.followedUp);
-      // DECOUPLED: toggling a boolean never erases the other boolean or resets stage to To-Reach.
-      let nextStage = curStage;
-      if (field === "replied" && nextVal && (curStage === "to-reach" || curStage === "pitched")) nextStage = "in-conversation";
-      if (field === "followedUp" && nextVal && curStage !== "follow-up") nextStage = "follow-up";
-      await persistContact(selected, { [field]: nextVal, stage: nextStage });
-    }
-    catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t update status"); }
-  };
-  const setStage = async (stage: Stage) => {
-    if (!selected) return;
-    // DECOUPLED: Paused / Archived preserve replied / followedUp. Only forward transitions set booleans.
-    const patch: Partial<ContactValue> = { stage };
-    if (stage === "in-conversation" && !selected.value.replied) patch.replied = true;
-    if (stage === "won" && !selected.value.replied) patch.replied = true;
-    if (stage === "follow-up" && !selected.value.followedUp) patch.followedUp = true;
-    try {
-      await persistContact(selected, patch); showToast(`Moved to ${stageLabel(stage)}`);
-      if (stage === "won") { setWinContact(selected); setWinNote(""); setWinReferral(""); setWinModal(true); }
-    }
-    catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t update stage"); }
-  };
+  const friendlyAuthError = (msg: string) => { const m = msg.toLowerCase(); if (m.includes("invalid login")) return "Incorrect email or password. Try again, or use Forgot password."; if (m.includes("already registered")) return "This email already has an account. Switch to Sign in."; if (m.includes("expired")) return "That link expired. Request a new one."; if (m.includes("rate limit")) return "Too many attempts. Wait a few minutes."; return msg; };
+  const sendMagic = async (e?: React.FormEvent) => { if (e) e.preventDefault(); if (!authEmail.trim() || !authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; } setAuthBusy(true); setAuthError(null); const { error } = await supabase.auth.signInWithOtp({ email: authEmail.trim(), options: { emailRedirectTo: window.location.origin } }); setAuthBusy(false); if (error) setAuthError(friendlyAuthError(error.message)); else setAuthSent(true); };
+  const signInPassword = async (e?: React.FormEvent) => { if (e) e.preventDefault(); if (!authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; } if (!authPassword) { setAuthError("Please enter your password."); return; } setAuthBusy(true); setAuthError(null); if (authIsSignup) { const { error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword, options: { data: { full_name: authName.trim() }, emailRedirectTo: window.location.origin } }); if (error) setAuthError(friendlyAuthError(error.message)); } else { const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword }); if (error) setAuthError(friendlyAuthError(error.message)); } setAuthBusy(false); };
+  const sendReset = async (e?: React.FormEvent) => { if (e) e.preventDefault(); if (!authEmail.includes("@")) { setAuthError("Please enter a valid email."); return; } setAuthBusy(true); const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), { redirectTo: window.location.origin }); setAuthBusy(false); if (error) setAuthError(friendlyAuthError(error.message)); else setAuthSent(true); };
+  const saveNewPassword = async (e?: React.FormEvent) => { if (e) e.preventDefault(); if (authNewPassword.length < 8) { setAuthError("Password must be at least 8 characters."); return; } setAuthBusy(true); const { error } = await supabase.auth.updateUser({ password: authNewPassword }); setAuthBusy(false); if (error) setAuthError(friendlyAuthError(error.message)); else { setAuthMode("magic"); showToast("Password updated"); } };
+  const signInGoogle = async () => { setAuthBusy(true); const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin } }); if (error) { setAuthError(friendlyAuthError(error.message)); setAuthBusy(false); } };
 
-  const startResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX, startW = panelWidth;
-    const move = (ev: MouseEvent) => setPanelWidth(Math.max(360, Math.min(540, startW + (startX - ev.clientX))));
-    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
-  };
-
-  const startSheetDrag = (e: React.PointerEvent) => {
-    const startY = e.clientY, startPct = sheetPct;
-    const move = (ev: PointerEvent) => setSheetPct(Math.max(32, Math.min(92, startPct + ((startY - ev.clientY) / window.innerHeight) * 100)));
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
-  };
-
-  // ---- Form ----
-  const [form, setForm] = useState({ name: "", channel: "", outreachDate: todayISO(), contactDetails: "", link: "", replied: false, followedUp: false, notes: "", stage: "to-reach" as Stage, whyThem: "", whatSent: "", nextStep: "", workType: "" as WorkType, followUpDate: "", featuredLink: "" });
-  const previewLink = modal ? normalizeLink(form.link, form.channel, form.contactDetails) : "";
-  const showPreview = previewLink.startsWith("http") || previewLink.startsWith("mailto:");
-  const openAdd = (prefillNotes?: string, opts?: { clearScratchpadAfterSave?: boolean; prefill?: Partial<typeof form> }) => { setForm({ name: "", channel: "", outreachDate: todayISO(), contactDetails: "", link: "", replied: false, followedUp: false, notes: prefillNotes || "", stage: "to-reach", whyThem: "", whatSent: "", nextStep: "", workType: "", followUpDate: "", featuredLink: profile.featuredLink || "", ...(opts?.prefill || {}) }); setFormError(null); setPendingClearScratchpad(!!opts?.clearScratchpadAfterSave); setModal({ mode: "add" }); };
-  const openEdit = (c: Contact) => { const v = normalizeContactValue(c.value); setForm({ name: v.name, channel: v.channel, outreachDate: v.outreachDate || todayISO(), contactDetails: v.contactDetails, link: v.link, replied: v.replied, followedUp: v.followedUp, notes: v.notes, stage: v.stage || "to-reach", whyThem: v.whyThem || "", whatSent: v.whatSent || "", nextStep: v.nextStep || "", workType: v.workType || "", followUpDate: v.followUpDate || "", featuredLink: v.featuredLink || "" }); setFormError(null); setModal({ mode: "edit", contact: c }); };
-  useEffect(() => {
-    if (modal) { const t = setTimeout(() => formRef.current?.querySelector<HTMLInputElement>("input")?.focus(), 40); return () => clearTimeout(t); }
-  }, [modal]);
-  const submitForm = async () => {
-    if (!form.name.trim()) { setFormError("Name is required."); return; }
-    const normalized = normalizeLink(form.link, form.channel, form.contactDetails);
-    if (form.link.trim() && (!normalized || (!normalized.startsWith("mailto:") && !/^https?:\/\//.test(normalized)))) { setFormError("Link should look like a URL, for example https://example.com."); return; }
-    if (normalized.startsWith("http") && !looksLikeUrl(normalized)) { setFormError("Link should look like a URL, for example https://example.com."); return; }
-    setBusy(true); setFormError(null);
-    const now = new Date().toISOString();
-    try {
-      if (modal?.mode === "edit") {
-        const c = modal.contact;
-        // Preserve history on Paused / Archived. Only forward stages set booleans.
-        const preservedReplied = (form.stage === "paused" || form.stage === "archived") ? c.value.replied : (form.stage === "in-conversation" || form.stage === "won" ? true : c.value.replied);
-        const preservedFollowed = (form.stage === "paused" || form.stage === "archived") ? c.value.followedUp : (form.stage === "follow-up" ? true : c.value.followedUp);
-        await persistContact(c, { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: preservedReplied, followedUp: preservedFollowed, notes: form.notes, stage: form.stage, whyThem: form.whyThem.trim(), whatSent: form.whatSent.trim(), nextStep: form.nextStep.trim(), workType: form.workType, followUpDate: form.followUpDate, featuredLink: form.featuredLink.trim() });
-        if (selectedId === c.id) setNotesDraft(form.notes);
-        showToast("Contact updated"); selectContact(c.id);
-      } else {
-        const value: ContactValue = { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: form.stage === "in-conversation" || form.stage === "won", followedUp: form.stage === "follow-up", notes: form.notes, createdAt: now, updatedAt: now, stage: form.stage, whyThem: form.whyThem.trim(), whatSent: form.whatSent.trim(), nextStep: form.nextStep.trim(), workType: form.workType, followUpDate: form.followUpDate, featuredLink: form.featuredLink.trim() };
-        const created = await api("records.create", { collection: "outreach-contacts", value, idempotency_key: `contact-${uid()}` }) as { id: string };
-        await reloadContacts(); setModal(null); showToast("Contact added");
-        if (pendingClearScratchpad) { setScratchpad(""); scratchpadRef.current = ""; setScratchpadSavedAt(null); setClearConfirm(false); setPendingClearScratchpad(false); saveSettings(themeMode, selectedId); }
-        selectContact(created.id);
-      }
-      setModal(null);
-    } catch (e) { setFormError(e instanceof Error ? e.message : "Couldn’t save contact"); }
-    finally { setBusy(false); }
-  };
-  const confirmDelete = async () => {
-    if (!deleteTarget) return; setBusy(true);
-    const target = deleteTarget; setDeleteTarget(null); setBusy(false);
-    // SOFT DELETE + UNDO: remove from UI now, purge in 5s unless Undo is tapped.
-    setContacts(prev => prev.filter(c => c.id !== target.id));
-    if (selectedId === target.id) { setSelectedId(null); setPanelOpen(false); saveSettings(themeMode, null); }
-    const timer = window.setTimeout(async () => {
-      try { await api("records.delete", { collection: "outreach-contacts", id: target.id }); } catch { /* already gone */ }
-      setPendingDelete(cur => cur?.contact.id === target.id ? null : cur);
-    }, 5000);
-    setPendingDelete({ contact: target, timer });
-    showToast(`Archived ${target.value.name}.`);
-  };
-  const undoDelete = () => {
-    if (!pendingDelete) return;
-    window.clearTimeout(pendingDelete.timer);
-    setContacts(prev => [...prev, pendingDelete.contact].sort((a,b) => b.value.updatedAt.localeCompare(a.value.updatedAt)));
-    setPendingDelete(null); showToast("Restored.");
-  };
-  const saveWinLoop = async () => {
-    if (!winContact) return;
-    try {
-      const patch: Partial<ContactValue> = { winNote: winNote.trim(), testimonial: winNote.trim() };
-      await persistContact(winContact, patch);
-      if (winReferral.trim()) {
-        const parsed = parsePasteToContact(winReferral.trim());
-        const value: ContactValue = { name: parsed.name || winReferral.trim(), channel: parsed.channel || "Instagram", outreachDate: todayISO(), contactDetails: winReferral.trim(), link: parsed.link, replied: false, followedUp: false, notes: `Referred by ${winContact.value.name}.`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), stage: "to-reach", whyThem: "", whatSent: "", nextStep: `Intro via ${winContact.value.name}`, workType: winContact.value.workType || "", followUpDate: "", featuredLink: "", referredById: winContact.id };
-        const created = await api("records.create", { collection: "outreach-contacts", value, idempotency_key: `contact-${uid()}` }) as { id: string };
-        await reloadContacts(); showToast(`Win saved. ${parsed.name || "Referral"} added to To-Reach.`);
-        selectContact(created.id);
-      } else { showToast("Win saved."); }
-    } catch (e) { showToast(e instanceof Error ? e.message : "Could not save win"); }
-    setWinModal(false); setWinContact(null);
-  };
-  const handlePasteAdd = async () => {
-    const raw = pasteText.trim(); if (!raw) return;
-    const parsed = parsePasteToContact(raw);
-    // Duplicate check by normalized link + name
-    const dup = contacts.find(c => (parsed.link && displayLink(c) === parsed.link) || (parsed.name && c.value.name.toLowerCase() === parsed.name.toLowerCase()));
-    if (dup) { selectContact(dup.id); showToast("You already have this contact. Opened it instead."); setPasteText(""); return; }
-    const value: ContactValue = { name: parsed.name || raw, channel: parsed.channel, outreachDate: todayISO(), contactDetails: parsed.contactDetails, link: parsed.link, replied: false, followedUp: false, notes: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), stage: "to-reach", whyThem: "", whatSent: "", nextStep: "", workType: "", followUpDate: "", featuredLink: "" };
-    try { const created = await api("records.create", { collection: "outreach-contacts", value, idempotency_key: `contact-${uid()}` }) as { id: string }; await reloadContacts(); setPasteText(""); showToast("Added to To-Reach."); selectContact(created.id); } catch (e) { showToast(e instanceof Error ? e.message : "Could not add contact"); }
-  };
-  const todaysThree = (() => {
-    const today = todayISO();
-    const due = contacts.filter(c => isFollowUpDue(c.value, today) && !todayDone.includes(c.id));
-    const toReach = contacts.filter(c => (c.value.stage || "to-reach") === "to-reach" && !todayDone.includes(c.id));
-    const deepen = contacts.filter(c => (c.value.stage || "") === "in-conversation" && !todayDone.includes(c.id));
-    const list: { kind: string; contact: Contact }[] = [];
-    if (toReach[0]) list.push({ kind: "New", contact: toReach[0] });
-    if (due[0]) list.push({ kind: "Follow-up", contact: due[0] });
-    if (deepen[0]) list.push({ kind: "Deepen", contact: deepen[0] });
-    return list;
-  })();
-  const markTodayDone = (id: string) => { setTodayDone(prev => [...prev, id]); setStreak(s => s + 1); showToast("Done. Next up."); };
-
-  const closePanel = () => { selectContact(null); };
-
-  // ---- Settings: Profile + Shortcuts ----
-  const openSettings = (tab: "profile" | "shortcuts" | "account") => {
-    setProfileDraft({ name: profile.name, socials: normalizeSocials(profile.socials), avatarUrl: profile.avatarUrl || "", whatIDo: profile.whatIDo || "", openFor: profile.openFor || "", featuredLink: profile.featuredLink || "" });
-    setSettingsTab(tab);
-    setSettingsOpen(true);
-    setCapturing(null);
-  };
-  const saveProfile = async () => {
-    const next: ProfileValue = { name: profileDraft.name.trim(), socials: normalizeSocials(profileDraft.socials.map(s => ({ ...s, platform: s.platform.trim(), value: s.value.trim() }))), avatarUrl: (profileDraft.avatarUrl || "").trim(), whatIDo: (profileDraft.whatIDo || "").trim(), openFor: (profileDraft.openFor || "").trim(), featuredLink: (profileDraft.featuredLink || "").trim() };
-    setProfile(next); profileRef.current = next; setProfileDraft(next);
-    try { await saveSettings(themeMode, selectedId); showToast("Profile saved. Your links are live."); } catch { showToast("Could not save profile. Tap Save again."); }
-    setSettingsOpen(false);
-  };
-  // --- Avatar / PFP: Supabase Storage (bucket: avatars, public, per-user folder) ---
-  const handleAvatarFile = async (file: File) => {
-    if (!user) { showToast("Sign in to upload a photo"); return; }
-    if (!file.type.startsWith("image/")) { showToast("Please choose an image file"); return; }
-    if (file.size > 5 * 1024 * 1024) { showToast("Photo must be under 5MB"); return; }
-    setAvatarUploading(true);
-    try {
-      const rawExt = file.name.split(".").pop()?.toLowerCase() || "jpg";
-      if (rawExt === "svg") { showToast("SVG photos are blocked for safety. Use JPG, PNG or WebP."); return; }
-      const ext = ["jpg", "jpeg", "png", "webp", "gif"].includes(rawExt) ? rawExt : "jpg";
-      const path = `${user.id}/avatar.${ext}`;
-      // Clean old avatar with different extension so only one file lives in the folder
-      try {
-        const { data: existing } = await supabase.storage.from("avatars").list(user.id);
-        if (existing && existing.length > 0) {
-          const toRemove = existing.filter(f => f.name !== `avatar.${ext}`).map(f => `${user.id}/${f.name}`);
-          if (toRemove.length > 0) await supabase.storage.from("avatars").remove(toRemove);
-        }
-      } catch { /* cleanup is best-effort */ }
-      const { error: uploadError } = await supabase.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
-      if (uploadError) throw uploadError;
-      const { data } = supabase.storage.from("avatars").getPublicUrl(path);
-      const url = `${data.publicUrl}?t=${Date.now()}`;
-      setProfileDraft(d => ({ ...d, avatarUrl: url }));
-      showToast("Photo ready — tap Save profile to keep it");
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Could not upload photo";
-      if (msg.toLowerCase().includes("bucket not found") || msg.toLowerCase().includes("not found")) showToast("Avatar storage not set up yet — run the new SQL in Supabase");
-      else showToast(msg);
-    } finally { setAvatarUploading(false); }
-  };
-  const handleRemoveAvatar = async () => {
-    setProfileDraft(d => ({ ...d, avatarUrl: "" }));
-    if (user) {
-      try {
-        const { data } = await supabase.storage.from("avatars").list(user.id);
-        if (data && data.length > 0) await supabase.storage.from("avatars").remove(data.map(f => `${user.id}/${f.name}`));
-      } catch { /* best-effort */ }
-    }
-    showToast("Photo removed — tap Save profile");
-  };
-  const updateSocial = (id: string, field: "platform" | "value", nextValue: string) => {
-    setProfileDraft(d => ({ ...d, socials: d.socials.map(s => s.id === id ? { ...s, [field]: nextValue } : s) }));
-  };
-  const addCustomSocial = () => {
-    setProfileDraft(d => ({ ...d, socials: [...d.socials, { id: `social-custom-${uid()}`, platform: "", value: "", custom: true }] }));
-  };
-  const removeCustomSocial = (id: string) => {
-    setProfileDraft(d => ({ ...d, socials: d.socials.filter(s => s.id !== id) }));
-  };
-  const saveShortcuts = async () => {
-    shortcutsRef.current = shortcuts;
-    try { await saveSettings(themeMode, selectedId); showToast("Shortcuts saved."); } catch { showToast("Could not save shortcuts. Try again."); }
-  };
-  const resetShortcuts = async () => {
-    const next: ShortcutMap = { ...DEFAULT_SHORTCUTS };
-    setShortcuts(next); shortcutsRef.current = next;
-    try { await saveSettings(themeMode, selectedId); showToast("Shortcuts reset"); } catch { showToast("Shortcuts reset"); }
-  };
-
-  // Capture a new shortcut key
-  useEffect(() => {
-    if (!capturing) return;
-    const handler = (e: KeyboardEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") { setCapturing(null); return; }
-      const canon = canonicalFromEvent(e);
-      if (!canon) return;
-      setShortcuts(prev => { const next = { ...prev, [capturing]: canon }; shortcutsRef.current = next; return next; });
-      setCapturing(null);
-    };
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
-  }, [capturing]);
-
-  // Global keyboard shortcuts — fixed:
-  // - While typing, only Esc / Ctrl+Cmd+Enter / Mod shortcuts run, and Esc blurs so next shortcuts work again.
-  // - No duplicate Esc listener. Capturing owns keys while it is active.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (capturing) return;
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName || "";
-      const isTyping = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!target?.isContentEditable;
-      const isMod = e.ctrlKey || e.metaKey;
-      const isModEnter = isMod && e.key === "Enter";
-      const isEsc = e.key === "Escape";
-      // While typing: Esc blurs + closes, Mod+Enter saves, Mod shortcuts (e.g. Mod+E export) still work.
-      if (isTyping) {
-        if (isEsc) {
-          if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-          if (deleteTarget) { setDeleteTarget(null); return; }
-          if (settingsOpen) { setSettingsOpen(false); return; }
-          if (modal) { if (!busy) setModal(null); return; }
-          if (panelOpen) { closePanel(); return; }
-          return;
-        }
-        if (isModEnter && modal) { e.preventDefault(); submitForm(); return; }
-        if (isMod) {
-          if (matchesShortcut(e, shortcuts.export)) { e.preventDefault(); exportCSV(); return; }
-          if (matchesShortcut(e, shortcuts.saveForm) && modal) { e.preventDefault(); submitForm(); return; }
-        }
-        return;
-      }
-      if (settingsOpen) {
-        if (isEsc) setSettingsOpen(false);
-        return;
-      }
-      if (deleteTarget) {
-        if (isEsc) setDeleteTarget(null);
-        return;
-      }
-      if (modal) {
-        if (isEsc && !busy) { setModal(null); return; }
-        if (isModEnter) { e.preventDefault(); submitForm(); return; }
-        return;
-      }
-      // Not typing, no overlay: shortcuts
-      if (isEsc) { if (panelOpen) { e.preventDefault(); closePanel(); } return; }
-      if (shortcuts.close !== "Escape" && matchesShortcut(e, shortcuts.close)) { if (panelOpen) { e.preventDefault(); closePanel(); } return; }
-      if (matchesShortcut(e, shortcuts.openSettings)) { e.preventDefault(); openSettings("shortcuts"); return; }
-      if (matchesShortcut(e, shortcuts.focusSearch)) { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
-      if (matchesShortcut(e, shortcuts.newContact)) {
-        e.preventDefault();
-        if (selected && panelOpen) { const el = document.getElementById("notes-editor") as HTMLTextAreaElement | null; if (el) { el.focus(); return; } }
-        openAdd(); return;
-      }
-      if (matchesShortcut(e, shortcuts.cycleTheme)) { e.preventDefault(); cycleTheme(); return; }
-      if (matchesShortcut(e, shortcuts.export)) { e.preventDefault(); exportCSV(); return; }
-      if (matchesShortcut(e, shortcuts.next) || e.key === "ArrowDown") {
-        if (filtered.length === 0) return; e.preventDefault();
-        const idx = filtered.findIndex(c => c.id === selectedId);
-        const next = idx < 0 ? filtered[0] : filtered[Math.min(filtered.length - 1, idx + 1)];
-        selectContact(next.id); return;
-      }
-      if (matchesShortcut(e, shortcuts.prev) || e.key === "ArrowUp") {
-        if (filtered.length === 0) return; e.preventDefault();
-        const idx = filtered.findIndex(c => c.id === selectedId);
-        const prev = idx <= 0 ? filtered[0] : filtered[idx - 1];
-        selectContact(prev.id); return;
-      }
-      if (matchesShortcut(e, shortcuts.openSelected)) {
-        e.preventDefault();
-        if (selectedId) { setPanelOpen(true); return; }
-        if (filtered[0]) selectContact(filtered[0].id);
-        return;
-      }
-      if (matchesShortcut(e, shortcuts.filterAll)) { setFilter("all"); setActiveFocus(null); return; }
-      if (matchesShortcut(e, shortcuts.filterToReach)) { setFilter("to-reach"); setActiveFocus(null); return; }
-      if (matchesShortcut(e, shortcuts.filterReplied)) { setFilter("replied"); setActiveFocus(null); return; }
-      if (matchesShortcut(e, shortcuts.filterFollowed)) { setFilter("followed"); setActiveFocus(null); return; }
-      // Details shortcuts
-      if (!selected) return;
-      if (matchesShortcut(e, shortcuts.edit)) { e.preventDefault(); openEdit(selected); return; }
-      if (matchesShortcut(e, shortcuts.toggleReplied)) { e.preventDefault(); toggleStatus("replied"); return; }
-      if (matchesShortcut(e, shortcuts.toggleFollowed)) { e.preventDefault(); toggleStatus("followedUp"); return; }
-      if (matchesShortcut(e, shortcuts.openLink)) { if (selectedLink) { e.preventDefault(); window.open(selectedLink, "_blank", "noopener"); } return; }
-      if (matchesShortcut(e, shortcuts.copy)) { e.preventDefault(); const text = selected.value.contactDetails || selectedLink || selected.value.name; copyText(text, "shortcut-copy"); return; }
-      if (matchesShortcut(e, shortcuts.minimize)) { e.preventDefault(); if (panelOpen) setMinimized(m => !m); else setPanelOpen(true); return; }
-      if (matchesShortcut(e, shortcuts.back)) { e.preventDefault(); goBack(); return; }
-      if (matchesShortcut(e, shortcuts.delete)) { e.preventDefault(); setDeleteTarget(selected); return; }
+      const target = e.target as HTMLElement; const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen((v) => !v); setPaletteQuery(""); setTimeout(() => paletteRef.current?.focus(), 50); return; }
+      if (mod && e.key === "Enter") { e.preventDefault(); if (editingEntryId) saveThreadEntry(); else if (selected && document.activeElement?.tagName === "TEXTAREA") saveContactBasics(); return; }
+      if (e.key === "Escape") { if (paletteOpen) setPaletteOpen(false); else if (settingsOpen) setSettingsOpen(false); else if (editingEntryId) { setEditingEntryId(null); setEntryDraft(""); } else if (selected) setSelectedId(null); return; }
+      if (typing) return;
+      if (e.key === "/") { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); setView("contacts"); return; }
+      if (e.key.toLowerCase() === "n") { e.preventDefault(); captureRef.current?.focus(); captureRef.current?.select(); return; }
+      if (e.key.toLowerCase() === "e" && selected) { e.preventDefault(); addThreadEntry("note"); return; }
+      if (e.key.toLowerCase() === "j") { const list = view === "queue" ? queue : filtered; const idx = list.findIndex((c) => c.id === selectedId); const next = list[Math.min(idx + 1, list.length - 1)] || list[0]; if (next) selectContact(next.id); return; }
+      if (e.key.toLowerCase() === "k") { const list = view === "queue" ? queue : filtered; const idx = list.findIndex((c) => c.id === selectedId); const prev = list[Math.max(idx - 1, 0)] || list[0]; if (prev) selectContact(prev.id); return; }
+      if (e.key === "Enter" && selectedId) { return; }
+      if (e.key.toLowerCase() === "b" && prevId) { e.preventDefault(); selectContact(prevId); return; }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [capturing, settingsOpen, modal, deleteTarget, panelOpen, selected, selectedId, selectedLink, filtered, shortcuts, themeMode, busy, form]);
+    window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler);
+  }, [paletteOpen, settingsOpen, editingEntryId, selected, selectedId, prevId, view, queue, filtered, entryDraft]);
 
-  const todayLabel = new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-  const nextBest = (counts as any).followUpDueList?.[0] as Contact | undefined;
-  const focusLine = counts.needsFollowUp > 0 ? `Today: ${counts.needsFollowUp} to follow up, ${counts.toReach} to reach. Start with ${nextBest?.value.name || "the oldest thread"}.` : counts.outreachToday === 0 && counts.total > 0 ? "Today: Reach out to 1 new person." : counts.total === 0 ? "Paste a handle to create your first contact in 30 seconds." : "You are caught up. Deepen one thread.";
-  const todayDesk = { due: counts.needsFollowUp, waiting: (counts as any).inConversation || 0, todayCount: counts.outreachToday };
-  const applyFocus = (kind: "today" | "needs-follow-up" | "replied") => { setFilter(kind); setActiveFocus(kind === "today" ? "Outreach today" : kind === "needs-follow-up" ? "Needs follow-up" : "Replied"); if (isMobile || isTablet) { setPanelOpen(false); setMinimized(false); } };
-  const onScratchpadChange = (text: string) => {
-    setScratchpad(text); scratchpadRef.current = text; setScratchpadSavedAt(null); setClearConfirm(false); setScratchpadSaving(true);
-    if (scratchpadTimer.current) window.clearTimeout(scratchpadTimer.current);
-    scratchpadTimer.current = window.setTimeout(async () => { try { await saveSettings(themeMode, selectedId); setScratchpadSavedAt(formatTime(new Date())); } catch { /* keep draft in view; retry on next change */ } finally { setScratchpadSaving(false); } }, 400);
-  };
-  const clearScratchpad = async () => { setScratchpad(""); scratchpadRef.current = ""; setClearConfirm(false); setScratchpadSaving(true); try { await saveSettings(themeMode, selectedId); setScratchpadSavedAt(formatTime(new Date())); } catch { showToast("Couldn’t clear scratchpad"); } finally { setScratchpadSaving(false); } };
-  const [templateWorkType, setTemplateWorkType] = useState<WorkType>("");
-  const [templatePortfolio, setTemplatePortfolio] = useState("");
-  const saveTemplate = async (id: string) => { const next = templates.map(t => t.id === id ? { ...t, text: templateDraft, workType: templateWorkType, portfolioLink: templatePortfolio } : t); setTemplates(next); templatesRef.current = next; setEditingTemplateId(null); try { await saveSettings(themeMode, selectedId); showToast("Template saved"); } catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t save template"); } };
-  const resetTemplates = async () => { setTemplates(DEFAULT_TEMPLATES); templatesRef.current = DEFAULT_TEMPLATES; setEditingTemplateId(null); try { await saveSettings(themeMode, selectedId); showToast("Templates reset"); } catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t reset templates"); } };
-
-  const activeTemplate = templates.find(t => t.id === activeTemplateId) || null;
-  const headerInitials = initialsFor(profile.name);
-  const draftInitials = initialsFor(profileDraft.name);
-  const linkedSocials = profileDraft.socials.filter(s => s.value.trim() && socialHref(s.platform, s.value));
-  const emptyPanel = (
-    <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-9 sm:px-7">
-      <section aria-label="Today">
-        <div className="small-caps" style={{ color: "var(--muted)" }}>Today</div>
-        <div className="mt-6 grid grid-cols-3 gap-0" role="group" aria-label="Today overview">
-          {([{ kind: "needs-follow-up", label: "Follow-up due", value: todayDesk.due }, { kind: "replied", label: "In conversation", value: todayDesk.waiting }, { kind: "today", label: "Today", value: todayDesk.todayCount }] as const).map((row, i) => (
-            <button key={row.kind} onClick={() => applyFocus(row.kind)} aria-label={`Show ${row.label}: ${row.value}`} className={`min-h-[56px] px-1 py-2.5 text-center ${i > 0 ? "border-l" : ""}`} style={{ borderColor: "var(--divider)" }}>
-              <span className="block text-[20px] font-semibold leading-[1.3] tracking-[-0.01em]">{row.value}</span>
-              <span className="small-caps mt-1 block leading-[1.3]" style={{ color: "var(--muted)" }}>{row.label}</span>
-            </button>
-          ))}
-        </div>
-        <p className="mt-4 truncate text-left text-[15px] leading-relaxed" title={focusLine}>{focusLine}</p>
-        {nextBest && (
-          <button onClick={() => selectContact(nextBest.id)} className="mt-4 w-full rounded-[16px] border p-4 text-left" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-            <span className="small-caps block" style={{ color: "var(--muted)" }}>Do this next</span>
-            <span className="mt-2 block truncate text-[15px] font-semibold">{nextBest.value.name} — {stageLabel(nextBest.value.stage)}</span>
-            <span className="mt-1 block truncate text-[13px]" style={{ color: "var(--muted)" }}>{nextBest.value.nextStep || nextBest.value.whyThem || "Open to see context and follow up"}</span>
-            <span className="mt-2 block text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Open thread →</span>
-          </button>
-        )}
-      </section>
-
-      <section aria-label="Capture in 5 seconds" className="mt-14">
-        <label htmlFor="scratchpad" className="small-caps" style={{ color: "var(--muted)" }}>Capture in 5 seconds</label>
-        {quickNoteFocused ? (
-          <textarea id="scratchpad" autoFocus value={scratchpad} onChange={e => onScratchpadChange(e.target.value)} onBlur={() => { window.setTimeout(() => setQuickNoteFocused(false), 150); }} placeholder="Capture in 5 seconds to self..." rows={3} className="mt-4 w-full resize-y border-b bg-transparent pb-2 text-[15px] leading-relaxed outline-none" style={{ borderColor: "var(--divider)" }} />
-        ) : (
-          <input id="scratchpad" value={scratchpad} onChange={e => onScratchpadChange(e.target.value)} onFocus={() => setQuickNoteFocused(true)} onClick={() => setQuickNoteFocused(true)} placeholder="Capture in 5 seconds to self..." className="mt-4 w-full border-b bg-transparent pb-2 text-[15px] leading-relaxed outline-none" style={{ borderColor: "var(--divider)" }} />
-        )}
-        {quickNoteFocused && <p aria-live="polite" className="mt-2 text-xs" style={{ color: "var(--muted)" }}>{scratchpadSaving ? "Saving…" : scratchpadSavedAt ? `Saved • ${scratchpadSavedAt}` : `${scratchpad.length} characters`}</p>}
-        <div className="mt-3 flex items-center gap-5">
-          <button onClick={() => openAdd(scratchpad, { clearScratchpadAfterSave: true })} disabled={!scratchpad.trim()} className="min-h-[32px] text-xs font-medium underline underline-offset-4 disabled:opacity-40" style={{ color: "var(--muted)" }}>Add to To-Reach</button>
-          <button onClick={() => { if (!scratchpad.trim()) return; if (!clearConfirm) { setClearConfirm(true); return; } clearScratchpad(); }} disabled={!scratchpad.trim()} className="min-h-[32px] text-xs font-medium underline underline-offset-4 disabled:opacity-40" style={{ color: clearConfirm ? "#DB200D" : "var(--muted)" }}>{clearConfirm ? "Confirm clear" : "Clear"}</button>
-        </div>
-      </section>
-
-      <section aria-label="Templates" className="mt-14">
-        <div className="flex items-center justify-between gap-2">
-          <span className="small-caps" style={{ color: "var(--muted)" }}>Templates</span>
-          <button onClick={() => setActiveTemplateId(activeTemplateId ? null : (templates[0]?.id || null))} aria-expanded={!!activeTemplateId} aria-label={activeTemplateId ? "Collapse templates" : "Expand templates"} className="flex min-h-[32px] min-w-[32px] items-center justify-center rounded-full" style={{ color: "var(--muted)" }}>
-            <ChevronDown size={16} className="transition-transform" style={{ transform: activeTemplateId ? "rotate(180deg)" : "none" }} />
-          </button>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {templates.map(t => {
-            const active = t.id === activeTemplateId;
-            return <button key={t.id} onClick={() => setActiveTemplateId(active ? null : t.id)} aria-pressed={active} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={active ? { background: "var(--text)", color: "var(--bg)", borderColor: "var(--text)" } : { borderColor: "var(--divider)", color: "var(--muted)" }}>{t.title}</button>;
-          })}
-        </div>
-        {activeTemplate && (
-          <div className="mt-6">
-            {editingTemplateId === activeTemplate.id ? (
-              <div>
-                <label htmlFor={`template-${activeTemplate.id}`} className="sr-only">Edit {activeTemplate.title}</label>
-                <label className="small-caps block" style={{ color: "var(--muted)" }}>Work type</label>
-                <select value={templateWorkType} onChange={e => setTemplateWorkType(e.target.value as WorkType)} className="mt-2 h-[44px] w-full rounded-[12px] border px-3 text-sm" style={{ borderColor: "var(--divider)", background: "var(--input)" }}>{WORK_TYPES.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}</select>
-                <label className="small-caps mt-4 block" style={{ color: "var(--muted)" }}>Featured work link</label>
-                <input value={templatePortfolio} onChange={e => setTemplatePortfolio(e.target.value)} placeholder="https://your-portfolio.com/work" className="mt-2 h-[44px] w-full rounded-[12px] border px-3 text-sm" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-                <textarea id={`template-${activeTemplate.id}`} value={templateDraft} onChange={e => setTemplateDraft(e.target.value)} rows={6} className="mt-4 w-full resize-y border-b bg-transparent pb-2 text-sm leading-relaxed outline-none" style={{ borderColor: "var(--divider)" }} />
-                <div className="mt-3 flex items-center gap-5">
-                  <button onClick={() => saveTemplate(activeTemplate.id)} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Save</button>
-                  <button onClick={() => setEditingTemplateId(null)} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <>
-                {activeTemplate.workType && <span className="mb-3 inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{workTypeLabel(activeTemplate.workType)} • Pitch with work</span>}
-                {activeTemplate.portfolioLink && <a href={activeTemplate.portfolioLink} target="_blank" rel="noopener noreferrer" className="mb-3 block truncate text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Featured work: {activeTemplate.portfolioLink}</a>}
-                {profile.whatIDo && <p className="mb-3 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Your pitch card: {profile.name || "You"} — {profile.whatIDo}{profile.openFor ? ` • Open for ${profile.openFor}` : ""}</p>}
-                <p className="whitespace-pre-wrap text-sm leading-relaxed" style={{ color: "var(--muted)" }}>{activeTemplate.text}</p>
-                <div className="mt-4 flex flex-wrap items-center gap-5">
-                  <button onClick={() => copyText(activeTemplate.text, `template-${activeTemplate.id}`)} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>{copied === `template-${activeTemplate.id}` ? "Copied" : "Copy"}</button>
-                  <button onClick={() => openAdd(activeTemplate.text, { prefill: { workType: activeTemplate.workType || "", featuredLink: activeTemplate.portfolioLink || profile.featuredLink || "" } })} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Use in new contact</button>
-                  <button onClick={() => { setEditingTemplateId(activeTemplate.id); setTemplateDraft(activeTemplate.text); setTemplateWorkType(activeTemplate.workType || ""); setTemplatePortfolio(activeTemplate.portfolioLink || ""); }} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Edit</button>
-                  <button onClick={resetTemplates} className="min-h-[32px] text-xs font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Reset</button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-
-  const panelContent = selected ? (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {prevContact && selected.id !== prevContact.id && (
-        <div className="px-6 pt-5 sm:px-7">
-          <button onClick={goBack} className="min-h-[32px] text-sm" style={{ color: "var(--muted)" }}>← Back to {prevContact.name}</button>
-        </div>
-      )}
-      <div className="px-6 pt-9 sm:px-7">
-        <h2 className="break-words text-[clamp(30px,3vw,36px)] font-semibold leading-[1.1] tracking-[-0.02em]">{selected.value.name}</h2>
-        <p className="mt-4 text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>
-          {selected.value.channel || "—"} <span className="mx-1">•</span> {selected.value.outreachDate ? formatDate(selected.value.outreachDate) : "—"} <span className="mx-1">•</span> Updated {new Date(selected.value.updatedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium" style={{ background: "var(--tint)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: STAGES.find(s => s.value === (selected.value.stage || "to-reach"))?.dot }} />{stageLabel(selected.value.stage)}</span>
-          {selected.value.workType && <span className="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{workTypeLabel(selected.value.workType)}</span>}
-          {selected.value.followUpDate && <span className="inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium" style={{ background: "#FFF0EE", color: "#DB200D" }}>Follow-up {formatDate(selected.value.followUpDate)}</span>}
-        </div>
-      </div>
-      <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-6 pb-10 pt-2 sm:px-7">
-        <div className="mt-10 border-t" style={{ borderColor: "var(--divider)" }}>
-          <div className="flex min-h-[40px] items-center gap-3 border-b py-2.5" style={{ borderColor: "var(--divider)" }}>
-            <span className="small-caps w-[68px] shrink-0 text-left" style={{ color: "var(--muted)" }}>Contact</span>
-            <span className="min-w-0 flex-1 truncate text-left text-sm leading-[1.3]" title={selected.value.contactDetails || undefined} style={!selected.value.contactDetails ? { color: "var(--muted)" } : undefined}>{selected.value.contactDetails || "—"}</span>
-            {selected.value.contactDetails ? (
-              <button onClick={() => copyText(selected.value.contactDetails, "details")} className="flex min-h-[32px] shrink-0 items-center text-sm font-medium underline decoration-1 underline-offset-4" style={{ color: "var(--muted)" }}>{copied === "details" ? "Copied" : "Copy"}</button>
-            ) : (
-              <span className="w-[36px] shrink-0" aria-hidden="true" />
-            )}
-          </div>
-          <div className="flex min-h-[40px] items-center gap-3 border-b py-2.5" style={{ borderColor: "var(--divider)" }}>
-            <span className="small-caps w-[68px] shrink-0 text-left" style={{ color: "var(--muted)" }}>Link</span>
-            {selectedLink ? (
-              <a href={selectedLink} target="_blank" rel="noopener noreferrer" title={selectedLink} className="min-w-0 flex-1 truncate text-left text-sm font-medium leading-[1.3] underline decoration-1 underline-offset-4" style={{ color: "var(--brand)" }}>{shortLinkText(selectedLink)}</a>
-            ) : (
-              <span className="min-w-0 flex-1 truncate text-left text-sm leading-[1.3]" style={{ color: "var(--muted)" }}>No link</span>
-            )}
-            {selectedLink ? (
-              <a href={selectedLink} target="_blank" rel="noopener noreferrer" className="flex min-h-[32px] shrink-0 items-center text-sm font-medium underline decoration-1 underline-offset-4" style={{ color: "var(--muted)" }}>Open</a>
-            ) : (
-              <button onClick={() => openEdit(selected)} className="flex min-h-[32px] shrink-0 items-center whitespace-nowrap text-sm font-medium underline decoration-1 underline-offset-4" style={{ color: "var(--muted)" }}>Add link</button>
-            )}
-          </div>
-          <div className="border-b py-5" style={{ borderColor: "var(--divider)" }}>
-            <div className="flex items-center justify-between gap-3"><span className="small-caps" style={{ color: "var(--muted)" }}>Journey</span><span className="text-xs" style={{ color: "var(--muted)" }}>Tap a stage to move it</span></div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {STAGES.map(s => { const active = (selected.value.stage || "to-reach") === s.value; return <button key={s.value} onClick={() => setStage(s.value)} aria-pressed={active} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={active ? { background: "var(--text)", color: "var(--bg)", borderColor: "var(--text)" } : { borderColor: "var(--divider)", color: "var(--muted)" }}>{s.label}</button>; })}
-            </div>
-            <div className="mt-4 flex flex-wrap items-center gap-x-8 gap-y-4">
-              {(["replied", "followedUp"] as const).map(field => {
-                const on = selected.value[field];
-                return (
-                  <span key={field} className="flex items-center gap-2.5">
-                    <span className="text-sm">{field === "replied" ? "Replied" : "Followed up"}</span>
-                    <button role="switch" aria-checked={on} aria-pressed={on} aria-label={`Toggle ${field === "replied" ? "Replied" : "Followed up"} for ${selected.value.name}`} onClick={() => toggleStatus(field)} className="relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors" style={{ background: on ? "var(--text)" : "var(--divider)" }}>
-                      <span className="absolute top-[3px] h-[16px] w-[16px] rounded-full shadow transition-all" style={{ left: on ? 19 : 3, background: "var(--bg)" }} />
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-        {(selected.value.whyThem || selected.value.whatSent || selected.value.nextStep || selected.value.featuredLink) && (
-          <section className="mt-10 space-y-4">
-            <p className="small-caps" style={{ color: "var(--muted)" }}>Context — why them</p>
-            {selected.value.whyThem && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>Why them</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.whyThem}</p></div>}
-            {selected.value.whatSent && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>Pitch you sent</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.whatSent}</p></div>}
-            {selected.value.nextStep && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>Next step</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.nextStep}</p></div>}
-            {selected.value.featuredLink && safeHref(selected.value.featuredLink) && <a href={safeHref(selected.value.featuredLink)} target="_blank" rel="noopener noreferrer" className="block truncate text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Featured work for them →</a>}
-          </section>
-        )}
-        <section className="mt-12">
-          <div className="flex items-baseline justify-between gap-3">
-            <label htmlFor="notes-editor" className="small-caps" style={{ color: "var(--muted)" }}>Notes {search.trim() && notesDraft.toLowerCase().includes(search.trim().toLowerCase()) ? "• In notes" : ""}</label>
-            {notesSavedAt && !notesSaving ? <span className="text-xs" style={{ color: "var(--muted)" }}>Saved • {notesSavedAt}</span> : <span />}
-          </div>
-          <textarea id="notes-editor" value={notesDraft} onChange={e => onNotesChange(e.target.value)} onBlur={() => saveNotesNow(notesDraft)} placeholder="Add context, what you sent, what they said, next step…" className="mt-2 w-full resize-y border-0 border-b bg-transparent px-0 py-3 text-[15px] leading-[1.8] outline-none" style={{ borderColor: "var(--divider)", minHeight: 180 }} />
-        </section>
-      </div>
-      <div className="flex items-center justify-between gap-4 border-t px-6 py-4 sm:px-7" style={{ borderColor: "var(--divider)" }}>
-        <button onClick={() => openEdit(selected)} className="min-h-[36px] text-sm font-medium underline decoration-1 underline-offset-4" style={{ color: "var(--brand)" }}>Edit contact</button>
-        <button onClick={() => setDeleteTarget(selected)} className="min-h-[36px] text-sm font-medium underline decoration-1 underline-offset-4" style={{ color: "var(--muted)" }}>Delete</button>
-      </div>
-    </div>
-  ) : null;
-
-  const panelHeader = (
-    <div className="flex shrink-0 items-center justify-between border-b px-4 py-3 sm:px-5" style={{ borderColor: "var(--divider)" }}>
-      <span className="small-caps" style={{ color: "var(--muted)" }}>{selected ? "Details" : "Overview"}</span>
-      <div className="flex items-center gap-1">
-        <button onClick={() => setMinimized(true)} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label={selected ? "Minimize details" : "Minimize overview"} title="Minimize"><Minus size={18} /></button>
-        <button onClick={closePanel} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label={selected ? "Close details" : "Close overview"} title="Close"><X size={18} /></button>
+  if (authLoading) return (<div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ width: "100%", maxWidth: 560, padding: 24 }}>{[0, 1, 2, 3, 4, 5].map((i) => (<div key={i} className="skeleton" style={{ height: 56, marginTop: 16 }} />))}</div></div>);
+  if (!isSupabaseConfigured) return (<div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "var(--bg)", color: "var(--text)" }}><div style={{ maxWidth: 520, textAlign: "center" }}><p className="small-caps" style={{ color: "var(--muted)" }}>Reach. Setup needed</p><h1 className="display" style={{ marginTop: 16 }}>Connect your database to load contacts.</h1><p className="body" style={{ color: "var(--muted)", marginTop: 16 }}>Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel.</p></div></div>);
+  if (!user) return (
+    <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ width: "100%", maxWidth: 480 }}>
+        <p className="small-caps" style={{ color: "var(--muted)" }}>Reach</p><h1 className="display" style={{ marginTop: 16 }}>Outreach, curated.</h1><p className="body" style={{ color: "var(--muted)", marginTop: 16 }}>Your data, only yours.</p>
+        {authSent ? (<div style={{ marginTop: 24, border: "1px solid var(--divider)", borderRadius: 12, padding: 24 }}><p className="body" style={{ fontWeight: 600 }}>Check your inbox</p><p className="body" style={{ color: "var(--muted)", marginTop: 8 }}>We sent a link to {authEmail}. It expires in 1 hour.</p><button onClick={() => { setAuthSent(false); setAuthMode("magic"); }} className="btn-press" style={{ marginTop: 16, minHeight: 44, padding: "0 16px", border: "1px solid var(--divider)", borderRadius: 12, background: "transparent", color: "var(--text)" }}>Use a different email</button></div>) : authMode === "recovery" ? (<form onSubmit={saveNewPassword} style={{ marginTop: 24 }}><label className="small-caps" style={{ color: "var(--muted)" }}>New password</label><input value={authNewPassword} onChange={(e) => setAuthNewPassword(e.target.value)} type="password" placeholder="8+ characters" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)" }} />{authError && <p role="alert" style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}>{authError}</p>}<button type="submit" disabled={authBusy} className="btn-press" style={{ marginTop: 16, width: "100%", minHeight: 48, borderRadius: 12, background: "var(--brand)", color: "white", fontWeight: 600 }}>{authBusy ? "Saving." : "Save new password"}</button></form>) : authMode === "magic" ? (<form onSubmit={sendMagic} style={{ marginTop: 24 }}><label className="small-caps" style={{ color: "var(--muted)" }}>Email</label><input value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} type="email" placeholder="you@studio.com" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)" }} />{authError && <p role="alert" style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}>{authError}</p>}<button type="submit" disabled={authBusy} className="btn-press" style={{ marginTop: 16, width: "100%", minHeight: 48, borderRadius: 12, background: "var(--brand)", color: "white", fontWeight: 600 }}>{authBusy ? "Sending." : "Send magic link"}</button><button type="button" onClick={signInGoogle} disabled={authBusy} className="btn-press" style={{ marginTop: 8, width: "100%", minHeight: 48, borderRadius: 12, border: "1px solid var(--divider)", background: "var(--surface)", color: "var(--text)", fontWeight: 500 }}>Continue with Google</button><button type="button" onClick={() => { setAuthMode("password"); setAuthError(null); }} style={{ marginTop: 16, background: "transparent", border: 0, color: "var(--muted)", textDecoration: "underline", fontSize: 12 }}>Use password instead</button></form>) : authMode === "forgot" ? (<form onSubmit={sendReset} style={{ marginTop: 24 }}><label className="small-caps" style={{ color: "var(--muted)" }}>Email</label><input value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} type="email" placeholder="you@studio.com" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)" }} />{authError && <p role="alert" style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}>{authError}</p>}<button type="submit" disabled={authBusy} className="btn-press" style={{ marginTop: 16, width: "100%", minHeight: 48, borderRadius: 12, background: "var(--brand)", color: "white", fontWeight: 600 }}>{authBusy ? "Sending." : "Send reset link"}</button><button type="button" onClick={() => setAuthMode("password")} style={{ marginTop: 16, background: "transparent", border: 0, color: "var(--muted)", textDecoration: "underline", fontSize: 12 }}>Back to sign in</button></form>) : (<form onSubmit={signInPassword} style={{ marginTop: 24 }}>{authIsSignup && (<><label className="small-caps" style={{ color: "var(--muted)" }}>Full name</label><input value={authName} onChange={(e) => setAuthName(e.target.value)} placeholder="Your name" style={{ marginTop: 8, marginBottom: 16, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)" }} /></>)}<label className="small-caps" style={{ color: "var(--muted)" }}>Email</label><input value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} type="email" placeholder="you@studio.com" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)" }} /><label className="small-caps" style={{ color: "var(--muted)", display: "block", marginTop: 16 }}>Password</label><input value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} type="password" placeholder="8+ characters" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)" }} />{authError && <p role="alert" style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}>{authError}</p>}<button type="submit" disabled={authBusy} className="btn-press" style={{ marginTop: 16, width: "100%", minHeight: 48, borderRadius: 12, background: "var(--brand)", color: "white", fontWeight: 600 }}>{authBusy ? "Signing in." : authIsSignup ? "Create account" : "Sign in"}</button><div style={{ display: "flex", justifyContent: "space-between", marginTop: 16 }}><button type="button" onClick={() => setAuthIsSignup((v) => !v)} style={{ background: "transparent", border: 0, color: "var(--muted)", textDecoration: "underline", fontSize: 12 }}>{authIsSignup ? "Have an account? Sign in" : "No account? Create one"}</button><button type="button" onClick={() => setAuthMode("forgot")} style={{ background: "transparent", border: 0, color: "var(--muted)", textDecoration: "underline", fontSize: 12 }}>Forgot password?</button></div><button type="button" onClick={() => setAuthMode("magic")} style={{ marginTop: 16, background: "transparent", border: 0, color: "var(--muted)", textDecoration: "underline", fontSize: 12 }}>Use magic link instead</button></form>)}
+        <div style={{ marginTop: 32, display: "flex", flexWrap: "wrap", gap: 8 }}>{SHORTCUTS.map((s) => (<span key={s.label} style={{ fontSize: 12, color: "var(--muted)", border: "1px solid var(--divider)", borderRadius: 999, padding: "8px" }}>{s.keys} {s.label}</span>))}</div>
       </div>
     </div>
   );
 
-  // --- Auth screens ---
-  if (authLoading) {
-    return (<div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center" }}><p style={{ color: "var(--muted)" }}>Loading your outreach...</p></div>);
-  }
-  if (!isSupabaseConfigured) {
-    return (
-      <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <div style={{ maxWidth: 520, width: "100%", textAlign: "center" }}>
-          <p className="small-caps" style={{ color: "var(--muted)" }}>Reach • Setup needed</p>
-          <h1 className="mt-3 text-[32px] font-semibold">Connect your database to load contacts. Add keys in Vercel, then redeploy.</h1>
-          <p className="mt-3 leading-relaxed" style={{ color: "var(--muted)" }}>Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel → Settings → Environment Variables, then redeploy. See SUPABASE-SETUP.txt in the files you downloaded.</p>
-        </div>
-      </div>
-    );
-  }
-  if (!user) {
-    const pwScore = passwordScore(authPassword);
-    const pwLabel = passwordLabel(authPassword);
-    const pwColor = pwScore <= 1 ? "#DB200D" : pwScore <= 3 ? "#E6A800" : "#1A9A4A";
-    return (
-      <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="flex items-center justify-center px-4 py-10">
-        <div className="w-full max-w-[480px]">
-          <div className="text-center">
-            <span className="mx-auto block h-[10px] w-[10px] rounded-[2px]" style={{ background: "#DB200D" }} />
-            <h1 className="mt-4 text-[34px] font-semibold tracking-[-0.02em]">Reach</h1>
-            <p className="mt-1 text-[15px]" style={{ color: "var(--muted)" }}>Outreach, curated. Your data, only yours.</p>
-          </div>
-          <div className="mt-8 rounded-[16px] border p-6" style={{ borderColor: "var(--divider)", background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <div className="flex gap-1 rounded-full border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="tablist" aria-label="Sign in or create account">
-              {(["signin", "signup"] as const).map(tab => (
-                <button key={tab} role="tab" aria-selected={authTab === tab} onClick={() => { setAuthTab(tab); setAuthError(null); setAuthForgotMode(false); setAuthForgotSent(false); setAuthNeedsConfirm(false); setAuthSent(false); }} className="min-h-[40px] flex-1 rounded-full px-4 text-sm font-medium" style={authTab === tab ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{tab === "signin" ? "Sign in" : "Create account"}</button>
-              ))}
-            </div>
-            {authNeedsConfirm ? (
-              <div className="mt-6">
-                <h2 className="text-[22px] font-semibold">Check your inbox</h2>
-                <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>We sent a confirmation link to <b style={{ color: "var(--text)" }}>{authEmail}</b>. Click it, then come back and sign in. It expires in 1 hour.</p>
-                <div className="mt-5 flex gap-2">
-                  <button onClick={handleResendConfirm} disabled={authBusy} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)" }}>{authBusy ? "Sending…" : "Resend email"}</button>
-                  <button onClick={() => { setAuthNeedsConfirm(false); setAuthTab("signin"); setAuthMethod("password"); }} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white" style={{ background: "#DB200D" }}>Back to sign in</button>
-                </div>
-                {authError && <p role="alert" className="mt-3 text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
-              </div>
-            ) : authForgotMode ? (
-              <div className="mt-6">
-                <h2 className="text-[22px] font-semibold">Reset your password</h2>
-                {authForgotSent ? (
-                  <div className="mt-3 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}>
-                    <p className="font-medium">Check your inbox</p>
-                    <p className="mt-1 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>If an account exists for <b style={{ color: "var(--text)" }}>{authEmail}</b>, we sent a reset link. It expires in 1 hour.</p>
-                    <button onClick={() => { setAuthForgotMode(false); setAuthForgotSent(false); setAuthTab("signin"); }} className="mt-3 text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Back to sign in</button>
-                  </div>
-                ) : (
-                  <form onSubmit={handleForgotPassword} className="mt-5 space-y-3">
-                    <p className="text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Enter the email you signed up with. We will send you a link to set a new password.</p>
-                    <label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label>
-                    <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" required autoComplete="email" className="h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-                    {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
-                    <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Sending…" : "Send reset link"}</button>
-                    <button type="button" onClick={() => { setAuthForgotMode(false); setAuthError(null); }} className="min-h-[40px] w-full text-sm font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Back to sign in</button>
-                  </form>
-                )}
-              </div>
-            ) : authSent ? (
-              <div className="mt-6">
-                <h2 className="text-[22px] font-semibold">Check your inbox</h2>
-                <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>We sent a sign-in link to <b style={{ color: "var(--text)" }}>{authEmail}</b>. Open it on this device. It expires in 1 hour.</p>
-                <button onClick={() => { setAuthSent(false); setAuthError(null); }} className="mt-4 text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Use a different email</button>
-              </div>
-            ) : (
-              <>
-                <h2 className="mt-5 text-[22px] font-semibold">{authTab === "signin" ? "Welcome back" : "Create your account"}</h2>
-                <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>{authTab === "signin" ? "Sign in to see your outreach. Each account sees only its own contacts." : "One account for all your outreach. Same email = same contacts, no matter how you sign in."}</p>
-                <div className="mt-5 space-y-2">
-                  <button onClick={() => handleOAuth("google")} disabled={authBusy} className="flex min-h-[48px] w-full items-center justify-center gap-2.5 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)", background: "#fff", color: "#1f1f1f" }}>
-                    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 48 48" style={{ flexShrink: 0 }}>
-                      <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.5 6.1 29.5 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.7-.4-3.9z" />
-                      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 18.9 12 24 12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.5 6.1 29.5 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
-                      <path fill="#4CAF50" d="M24 44c5.4 0 10.3-2.1 14-5.5l-6.4-5.4C29.6 34.8 26.9 36 24 36c-5.1 0-9.5-3.2-11.1-7.8l-6.8 5.3C9.6 39.7 16.3 44 24 44z" />
-                      <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.3-2.4 4.3-4.7 5.5l6.4 5.4C39.9 35.6 44 30.4 44 24c0-1.3-.1-2.7-.4-3.9z" />
-                    </svg>
-                    Continue with Google
-                  </button>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button onClick={() => handleOAuth("github")} disabled={authBusy} className="flex min-h-[48px] items-center justify-center gap-2 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)", background: "var(--bg)", color: "var(--text)" }}>
-                      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }}><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.74.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.68.8.56A10.52 10.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z" /></svg>
-                      GitHub
-                    </button>
-                    <button onClick={() => handleOAuth("apple")} disabled={authBusy} className="flex min-h-[48px] items-center justify-center gap-2 rounded-[12px] border text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)", background: "var(--bg)", color: "var(--text)" }}>
-                      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }}><path d="M16.36 12.94c.01 2.1 1.84 2.8 1.87 2.81-.02.05-.29.99-1.04 1.96-.63.92-1.28 1.84-2.3 1.86-1 .02-1.32-.61-2.46-.6-1.14.01-1.5.6-2.45.62-1.02.02-1.8-.99-2.43-1.91-1.33-1.91-2.34-5.4-.95-7.76.68-1.15 1.9-1.88 3.22-1.9.99-.02 1.93.67 2.54.67.6 0 1.73-.83 2.92-.71.5.02 1.9.2 2.8 1.5-.07.05-1.67.98-1.65 2.91zM14.5 8.36c.52-.63.87-1.5.77-2.36-1.15.05-2.54.77-3.36 1.74-.74.86-1.39 2.23-1.22 3.55 1.04.08 2.1-.53 2.81-1.4z" /></svg>
-                      Apple
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-5 flex items-center gap-3" aria-hidden="true"><span className="h-px flex-1" style={{ background: "var(--divider)" }} /><span className="text-xs" style={{ color: "var(--muted)" }}>or with email</span><span className="h-px flex-1" style={{ background: "var(--divider)" }} /></div>
-                <div className="mt-4 flex gap-1 rounded-full border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="group" aria-label="Email sign-in method">
-                  {(["password", "magic"] as const).map(m => (
-                    <button key={m} onClick={() => { setAuthMethod(m); setAuthError(null); }} aria-pressed={authMethod === m} className="min-h-[36px] flex-1 rounded-full px-3 text-xs font-medium" style={authMethod === m ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{m === "password" ? "Password" : "Magic link"}</button>
-                  ))}
-                </div>
-                {authMethod === "magic" ? (
-                  <form onSubmit={handleSendMagicLink} className="mt-5 space-y-3">
-                    <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label><input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" required autoComplete="email" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-                    {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
-                    <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Sending…" : "Send magic link"}</button>
-                    <p className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>We send a one-time link. It expires in 1 hour and works once. Open it on this device.</p>
-                  </form>
-                ) : authTab === "signup" ? (
-                  <form onSubmit={handleSignUpPassword} className="mt-5 space-y-3">
-                    <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Full name</label><input type="text" value={authName} onChange={e => setAuthName(e.target.value)} placeholder="Memik Luqman" required autoComplete="name" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-                    <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label><input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" required autoComplete="email" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-                    <div>
-                      <label className="small-caps block" style={{ color: "var(--muted)" }}>Password</label>
-                      <div className="relative mt-2"><input type={authShowPassword ? "text" : "password"} value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="At least 8 characters" required autoComplete="new-password" minLength={8} className="h-[48px] w-full rounded-[12px] border px-3.5 pr-16 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><button type="button" onClick={() => setAuthShowPassword(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[32px] px-2 text-xs font-medium" style={{ color: "var(--muted)" }}>{authShowPassword ? "Hide" : "Show"}</button></div>
-                      {authPassword && (
-                        <div className="mt-2">
-                          <div className="h-[4px] w-full overflow-hidden rounded-full" style={{ background: "var(--divider)" }}><div className="h-full transition-all" style={{ width: `${Math.min(100, (pwScore / 5) * 100)}%`, background: pwColor }} /></div>
-                          <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>Strength: <b style={{ color: pwColor }}>{pwLabel}</b> • Use 8+ characters with letters, a number, and a symbol.</p>
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <label className="small-caps block" style={{ color: "var(--muted)" }}>Confirm password</label>
-                      <div className="relative mt-2"><input type={authShowConfirm ? "text" : "password"} value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)} placeholder="Repeat password" required autoComplete="new-password" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 pr-16 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><button type="button" onClick={() => setAuthShowConfirm(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[32px] px-2 text-xs font-medium" style={{ color: "var(--muted)" }}>{authShowConfirm ? "Hide" : "Show"}</button></div>
-                      {authConfirmPassword && authPassword !== authConfirmPassword && <p className="mt-1 text-xs font-medium" style={{ color: "#DB200D" }}>Passwords do not match.</p>}
-                    </div>
-                    <label className="flex items-start gap-2 pt-1 text-xs leading-relaxed" style={{ color: "var(--muted)" }}><input type="checkbox" checked={authAgree} onChange={e => setAuthAgree(e.target.checked)} className="mt-0.5 h-[16px] w-[16px] shrink-0" />I agree to the terms and understand my contacts are stored privately under my account. I can export or delete all my data anytime.</label>
-                    {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
-                    <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Creating…" : "Create account"}</button>
-                    <p className="text-center text-xs" style={{ color: "var(--muted)" }}>Already have an account? <button type="button" onClick={() => { setAuthTab("signin"); setAuthError(null); }} className="font-medium underline underline-offset-4" style={{ color: "var(--text)" }}>Sign in</button></p>
-                  </form>
-                ) : (
-                  <form onSubmit={handleSignInPassword} className="mt-5 space-y-3">
-                    <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Email</label><input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" required autoComplete="email" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-                    <div>
-                      <div className="flex items-center justify-between"><label className="small-caps block" style={{ color: "var(--muted)" }}>Password</label><button type="button" onClick={() => { setAuthForgotMode(true); setAuthForgotSent(false); setAuthError(null); }} className="text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Forgot password?</button></div>
-                      <div className="relative mt-2"><input type={authShowPassword ? "text" : "password"} value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="Your password" required autoComplete="current-password" className="h-[48px] w-full rounded-[12px] border px-3.5 pr-16 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><button type="button" onClick={() => setAuthShowPassword(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[32px] px-2 text-xs font-medium" style={{ color: "var(--muted)" }}>{authShowPassword ? "Hide" : "Show"}</button></div>
-                    </div>
-                    {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
-                    <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Signing in…" : "Sign in"}</button>
-                    <p className="text-center text-xs" style={{ color: "var(--muted)" }}>No account yet? <button type="button" onClick={() => { setAuthTab("signup"); setAuthError(null); }} className="font-medium underline underline-offset-4" style={{ color: "var(--text)" }}>Create account</button></p>
-                  </form>
-                )}
-              </>
-            )}
-          </div>
-          <p className="mt-4 text-center text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Data saved in Supabase • Row Level Security • You own your data • Same email = same contacts, no matter how you sign in.</p>
-        </div>
-      </div>
-    );
-  }
+  const activeTemplate = templates.find((t) => t.id === activeTemplateId) || null;
+  const selectedProof = proofStack.find((p) => p.id === selectedProofId) || null;
+  const paletteResults = paletteQuery.trim() ? visible.filter((c) => c.value.name.toLowerCase().includes(paletteQuery.toLowerCase())).slice(0, 6) : visible.slice(0, 6);
 
-  if (user && authRecoveryMode) {
-    return (
-      <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="flex items-center justify-center px-4 py-10">
-        <div className="w-full max-w-[440px]">
-          <div className="text-center"><span className="mx-auto block h-[10px] w-[10px] rounded-[2px]" style={{ background: "#DB200D" }} /><h1 className="mt-4 text-[28px] font-semibold">Set a new password</h1><p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>You came from a reset link for {user.email}.</p></div>
-          <form onSubmit={handleUpdatePasswordRecovery} className="mt-8 space-y-3 rounded-[16px] border p-6" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-            <div><label className="small-caps block" style={{ color: "var(--muted)" }}>New password</label><input type={authShowPassword ? "text" : "password"} value={authNewPassword} onChange={e => setAuthNewPassword(e.target.value)} placeholder="At least 8 characters" required minLength={8} autoComplete="new-password" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-            <div><label className="small-caps block" style={{ color: "var(--muted)" }}>Confirm new password</label><input type={authShowConfirm ? "text" : "password"} value={authNewConfirm} onChange={e => setAuthNewConfirm(e.target.value)} placeholder="Repeat password" required autoComplete="new-password" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-            {authError && <p role="alert" className="text-sm font-medium" style={{ color: "#DB200D" }}>{authError}</p>}
-            <button type="submit" disabled={authBusy} className="min-h-[48px] w-full rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{authBusy ? "Saving…" : "Save new password"}</button>
-            <button type="button" onClick={() => setAuthRecoveryMode(false)} className="min-h-[40px] w-full text-sm font-medium underline underline-offset-4" style={{ color: "var(--muted)" }}>Skip for now</button>
-          </form>
-        </div>
-      </div>
-    );
-  }
   return (
-    <div data-safe-area-inset-root style={{ boxSizing: "border-box", paddingTop: "var(--safe-area-inset-top)", minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }} className="overflow-x-clip">
-      <header data-safe-area-sticky-top style={{ top: "var(--safe-area-inset-top)", background: "var(--bg)", borderColor: "var(--divider)" }} className="sticky z-30 border-b">
-        <div className="flex w-full items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <span className="h-[10px] w-[10px] shrink-0 rounded-[2px]" style={{ background: "#DB200D" }} aria-hidden="true" />
-            <div className="min-w-0">
-              <p className="truncate text-[19px] font-medium leading-none tracking-[-0.01em]">Reach</p>
-              <p className="mt-1 hidden truncate text-xs sm:block" style={{ color: "var(--muted)" }}>Outreach, curated.</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => changeTheme(themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system")} aria-label={`Theme: ${themeMode}. Tap to change theme.`} title={`Theme: ${themeMode}`} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[12px] border" style={{ borderColor: "var(--divider)" }}>
-              {themeMode === "dark" ? <Moon size={17} /> : themeMode === "light" ? <Sun size={17} /> : <Monitor size={17} />}
-            </button>
-            <button onClick={exportCSV} className="hidden min-h-[44px] items-center gap-2 rounded-[12px] border px-3.5 text-sm font-medium lg:flex" style={{ borderColor: "var(--divider)" }}><Download size={16} /><span>Export</span></button>
-            <button onClick={() => openAdd()} className="hidden min-h-[44px] items-center gap-2 rounded-[12px] px-4 text-sm font-medium text-white lg:flex" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
-            {isDesktop ? (
-              <button onClick={() => openSettings("profile")} aria-label="Open settings" title="Settings" className="flex min-h-[44px] items-center gap-2">
-                {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{headerInitials}</span>}
-                {profile.name ? <span className="hidden max-w-[120px] truncate text-sm font-medium md:inline">{profile.name}</span> : null}
-              </button>
-            ) : (
-              <span className="flex min-h-[44px] items-center" aria-hidden="true">
-                {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[44px] w-[44px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[16px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }}>{headerInitials}</span>}
-              </span>
-            )}
-          </div>
+    <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }}>
+      <header style={{ height: 64, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", borderBottom: "1px solid var(--divider)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}><span style={{ width: 10, height: 10, background: "var(--brand)", borderRadius: 2, flexShrink: 0 }} /><span style={{ fontSize: 15, fontWeight: 500, letterSpacing: "-0.01em" }}>Reach</span><span className="caption" style={{ color: "var(--muted)", display: isDesktopState ? "block" : "none" }}>Outreach, curated.</span></div>
+        <nav aria-label="Primary" style={{ display: "flex", gap: 8, background: "var(--surface-2)", borderRadius: 999, padding: 4 }}>
+          {(["queue", "contacts"] as View[]).map((v) => (<button key={v} onClick={() => setView(v)} aria-current={view === v ? "page" : undefined} className="btn-press" style={{ minHeight: 40, padding: "0 16px", borderRadius: 999, background: view === v ? "var(--text)" : "transparent", color: view === v ? "var(--bg)" : "var(--muted)", fontSize: 15, fontWeight: 500, textTransform: "capitalize" }}>{v === "queue" ? "Queue" : "Contacts"}</button>))}
+        </nav>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => captureRef.current?.focus()} className="btn-press" style={{ minHeight: 44, padding: "0 16px", borderRadius: 12, background: "var(--brand)", color: "white", fontSize: 15, fontWeight: 500, display: "flex", alignItems: "center", gap: 8 }}><Plus size={17} /> Add</button>
+          <button onClick={() => { setProfileDraft(profile); setSettingsOpen(true); }} aria-label="Open settings" className="btn-press" style={{ width: 44, height: 44, borderRadius: "50%", background: "var(--text)", color: "var(--bg)", fontSize: 15, fontWeight: 600 }}>{initialsFor(profile.name)}</button>
         </div>
       </header>
 
-      <main className="flex w-full max-w-none items-stretch px-4 sm:px-6 lg:px-8">
-        <section className="flex min-w-0 flex-1 flex-col py-6" style={{ minHeight: "calc(100vh - 69px)", paddingBottom: !isDesktop ? 110 : undefined }}>
-          <div className="px-0 pt-5 lg:pt-0">
-            <p className="small-caps" style={{ color: "var(--muted)" }}>Your outreach</p>
-            <h1 className="mt-2 text-[34px] font-semibold leading-[1.02] tracking-[-0.025em] sm:text-[clamp(30px,4vw,44px)]">Every conversation,<br /> held with care.</h1>
-            <p className="mt-3 max-w-[560px] text-[15px] leading-relaxed" style={{ color: "var(--muted)" }}>Track who you reached out to, what was said, and what comes next — without losing the human thread.</p>
-            {/* EXECUTED: Paste-to-Contact - 1-field capture, 2 clicks to done */}
-            <form onSubmit={(e) => { e.preventDefault(); handlePasteAdd(); }} className="mt-5 flex max-w-[560px] gap-2">
-              <input value={pasteText} onChange={e => setPasteText(e.target.value)} placeholder="Paste handle, link, or name" aria-label="Paste handle, link, or name" className="h-[48px] flex-1 rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-              <button type="submit" disabled={!pasteText.trim()} className="btn-press min-h-[48px] shrink-0 rounded-[12px] px-4 text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--brand)" }}>Add to To-Reach</button>
-            </form>
-            {pasteText.trim() && (() => { const pv = parsePasteToContact(pasteText.trim()); return pv.name ? <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>Preview: {pv.name} • {pv.channel || "Add channel"} • {pv.link || "No link yet"}</p> : null; })()}
-            {/* EXECUTED: Today's 3 - 1 New, 1 Follow-up, 1 Deepen */}
-            {todaysThree.length > 0 && (
-              <div className="mt-5 max-w-[560px] rounded-[16px] border p-4" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-                <div className="flex items-center justify-between"><p className="small-caps" style={{ color: "var(--muted)" }}>Do this next • Today&apos;s 3</p>{streak > 0 && <span className="text-xs font-medium" style={{ color: "var(--brand)" }}>{streak} done today</span>}</div>
-                <div className="mt-3 space-y-2">
-                  {todaysThree.map(item => (
-                    <div key={item.contact.id} className="flex items-center gap-3">
-                      <span className="shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{item.kind}</span>
-                      <button onClick={() => selectContact(item.contact.id)} className="min-w-0 flex-1 truncate text-left text-sm font-medium">{item.contact.value.name}</button>
-                      <button onClick={() => markTodayDone(item.contact.id)} className="btn-press min-h-[32px] shrink-0 rounded-full px-3 text-xs font-medium text-white" style={{ background: "var(--brand)" }}>Mark done</button>
-                    </div>
-                  ))}
-                </div>
+      <main style={{ display: "flex", alignItems: "stretch", width: "100%" }}>
+        <section style={{ flex: 1, minWidth: 0, padding: 24, paddingBottom: 96 }}>
+          <p className="small-caps" style={{ color: "var(--muted)" }}>{view === "queue" ? "Do this next" : "Your outreach"}</p>
+          <h1 className="display" style={{ marginTop: 8 }}>{view === "queue" ? "Who do you contact next?" : "Every conversation, held with care."}</h1>
+          <form onSubmit={handlePasteAdd} style={{ marginTop: 24, maxWidth: 560, display: "flex", gap: 8 }}>
+            <input ref={captureRef} value={pasteText} onChange={(e) => setPasteText(e.target.value)} placeholder="Paste handle, link, or name" aria-label="Paste handle, link, or name" style={{ height: 48, flex: 1, borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }} />
+            <button type="submit" disabled={!pasteText.trim() || busy} className="btn-press" style={{ minHeight: 48, padding: "0 16px", borderRadius: 12, background: "var(--brand)", color: "white", fontSize: 15, fontWeight: 500, opacity: !pasteText.trim() ? 0.5 : 1 }}>{busy ? "Adding." : "Add to To-Reach"}</button>
+          </form>
+          {pasteText.trim() && (() => { const pv = parsePasteToContact(pasteText.trim()); return pv.name ? <p className="caption" style={{ color: "var(--muted)", marginTop: 8 }}>Preview: {pv.name} / {pv.channel || "Add channel"} / {pv.link || "No link yet"}</p> : null; })()}
+
+          {view === "queue" && (
+            <div style={{ marginTop: 32, maxWidth: 720 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", border: "1px solid var(--divider)", borderRadius: 12, overflow: "hidden" }}>
+                {[{ label: "Follow-up due", value: counts.due }, { label: "To reach", value: counts.toReach }, { label: "In conversation", value: counts.inConversation }].map((r) => (<div key={r.label} style={{ padding: 16, textAlign: "center" }}><div style={{ fontSize: 28, fontWeight: 600 }}>{r.value}</div><div className="small-caps" style={{ color: "var(--muted)", marginTop: 8 }}>{r.label}</div></div>))}
               </div>
-            )}
-          </div>
-          {!isDesktop && (
-            <div className="mt-6 px-0">
-              <div className="rounded-[16px] border" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-                <button onClick={() => { setPanelOpen(true); setMinimized(false); setSelectedId(null); setActiveTemplateId(null); }} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
-                  <span className="small-caps" style={{ color: "var(--muted)" }}>Overview</span>
-                  <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>Open overview →</span>
-                </button>
-                <div className="grid grid-cols-3 border-t" style={{ borderColor: "var(--divider)" }}>
-                  {([{ label: "Today", value: counts.outreachToday }, { label: "Needs follow-up", value: counts.needsFollowUp }, { label: "Replied", value: counts.replied }] as const).map((row, i) => (
-                    <div key={row.label} className={`min-h-[64px] px-1 py-3 text-center ${i > 0 ? "border-l" : ""}`} style={{ borderColor: "var(--divider)" }}>
-                      <span className="block text-[22px] font-semibold leading-none tracking-[-0.01em]">{row.value}</span>
-                      <span className="small-caps mt-1.5 block leading-tight" style={{ color: "var(--muted)" }}>{row.label}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="truncate px-4 pb-3 pt-3 text-[13px] leading-relaxed" title={focusLine} style={{ color: "var(--muted)" }}>{focusLine}</p>
-              </div>
+              {loading ? (<div style={{ marginTop: 24 }}>{[0, 1, 2, 3, 4, 5].map((i) => (<div key={i} className="skeleton" style={{ height: 56, marginTop: 8 }} />))}</div>) : loadError ? (<div style={{ marginTop: 24, border: "1px solid var(--divider)", borderRadius: 12, padding: 24 }}><p className="body" style={{ fontWeight: 600 }}>Couldn&apos;t reach your saved contacts.</p><p className="body" style={{ color: "var(--muted)", marginTop: 8 }}>{loadError}</p><button onClick={loadAll} className="btn-press" style={{ marginTop: 16, minHeight: 40, padding: "0 16px", borderRadius: 12, border: "1px solid var(--divider)", background: "var(--surface)" }}>Try again</button></div>) : queue.length === 0 ? (<div style={{ marginTop: 32, textAlign: "center", padding: 24 }}><p style={{ fontSize: 28, fontWeight: 600 }}>Nothing due today.</p><p className="body" style={{ color: "var(--muted)", marginTop: 8 }}>You are caught up. Add 1 person you admired this week.</p><button onClick={() => captureRef.current?.focus()} className="btn-press" style={{ marginTop: 24, minHeight: 48, padding: "0 16px", borderRadius: 12, background: "var(--brand)", color: "white", fontWeight: 500 }}>Add to To-Reach</button></div>) : (<div style={{ marginTop: 24 }}><p className="small-caps" style={{ color: "var(--muted)" }}>Queue / {queue.length} actionable</p><div style={{ marginTop: 16, borderTop: "1px solid var(--divider)" }}>{queue.map((c, idx) => (<div key={c.id} style={{ minHeight: 56, display: "flex", alignItems: "center", gap: 16, padding: "8px 16px", borderBottom: "1px solid var(--divider)", background: c.id === selectedId ? "var(--surface-2)" : "transparent", borderLeft: idx === 0 ? "2px solid var(--brand)" : "2px solid transparent", cursor: "pointer" }} onClick={() => selectContact(c.id)}><span style={{ width: 8, height: 8, borderRadius: "50%", background: stageColor(c.value.stage), flexShrink: 0 }} /><div style={{ flex: 1, minWidth: 0 }}><div className="body" style={{ fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.value.name} {c.value.referredBy ? <span style={{ color: "var(--muted)", fontWeight: 400 }}>Via {c.value.referredBy}</span> : null}</div><div className="caption" style={{ color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{stageLabel(c.value.stage)} / {c.value.nextStep || c.value.whyThem || c.value.contactDetails || "Open to see context"}{c.value.followUpDate ? ` / Due ${formatDate(c.value.followUpDate)}` : ""}</div></div><button onClick={(e) => { e.stopPropagation(); snooze(c); }} className="btn-press" style={{ minHeight: 32, padding: "0 8px", borderRadius: 999, border: "1px solid var(--divider)", background: "transparent", color: "var(--muted)", fontSize: 12 }}>Snooze 4d</button><button onClick={(e) => { e.stopPropagation(); markDone(c); }} className="btn-press" style={{ minHeight: 32, padding: "0 16px", borderRadius: 999, background: "var(--brand)", color: "white", fontSize: 12, fontWeight: 500 }}>Mark done</button></div>))}</div></div>)}
+              {proofStack.length > 0 && (<div style={{ marginTop: 32 }}><p className="small-caps" style={{ color: "var(--muted)" }}>Proof Stack / {proofStack.length} wins</p><div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>{proofStack.slice(0, 3).map((p) => (<button key={p.id} onClick={() => selectContact(p.id)} style={{ textAlign: "left", border: "1px solid var(--divider)", borderRadius: 12, padding: 16, background: "var(--surface)" }}><div className="body" style={{ fontWeight: 600 }}>{p.name}</div><div className="body" style={{ color: "var(--muted)", marginTop: 8 }}>{p.text}</div>{p.link ? <div className="caption" style={{ color: "var(--brand)", marginTop: 8, textDecoration: "underline" }}>{p.link}</div> : null}</button>))}</div></div>)}
             </div>
           )}
-          <div className="mt-6 flex flex-col gap-3 px-0 lg:flex-row lg:items-center">
-            <div className="relative flex-1">
-              <Search size={17} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: "var(--muted)" }} />
-              <input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, notes, or link…" aria-label="Search contacts" className="h-[48px] w-full rounded-[12px] border pl-10 pr-10 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-              {search && <button onClick={() => setSearch("")} aria-label="Clear search" className="absolute right-2 top-1/2 flex h-[32px] w-[32px] -translate-y-1/2 items-center justify-center rounded-full"><X size={16} /></button>}
-            </div>
-            <div className="flex gap-1 overflow-x-auto no-scrollbar" role="tablist" aria-label="Filter contacts">
-              {([{ v: "all", label: "All" }, { v: "to-reach", label: "To reach" }, { v: "replied", label: "Replied" }, { v: "followed", label: "Followed up" }] as const).map(f => (
-                <button key={f.v} role="tab" aria-selected={filter === f.v} onClick={() => { setFilter(f.v); setActiveFocus(null); }} className="h-[40px] shrink-0 rounded-full px-3.5 text-sm font-medium" style={filter === f.v ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{f.label}</button>
-              ))}
-            </div>
-          </div>
-          <p className="mt-4 px-0 text-sm" style={{ color: "var(--muted)" }} aria-live="polite">{counts.total} {counts.total === 1 ? "contact" : "contacts"} • {counts.replied} replied • {counts.followed} followed up</p>
-          {activeFocus && <div className="mt-3 flex flex-wrap items-center gap-2 px-0"><span className="inline-flex min-h-[32px] items-center rounded-full px-3 text-xs font-medium" style={{ background: "var(--text)", color: "var(--bg)" }}>Showing: {activeFocus}</span><button onClick={() => { setActiveFocus(null); setFilter("all"); }} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>Clear</button></div>}
 
-
-          {loadError && <div className="mx-0 mt-4 flex items-start gap-3 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}><AlertTriangle size={18} className="mt-0.5 shrink-0" /><div><p className="text-sm font-medium">Couldn’t reach your saved contacts.</p><p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>{loadError}</p><button onClick={loadAll} className="mt-3 min-h-[40px] rounded-[10px] border px-3 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Try again</button></div></div>}
-
-          <div className="mt-3 border-t" style={{ borderColor: "var(--divider)", marginLeft: 0, marginRight: 0 }}>
-            {loading ? <p className="px-4 py-12 text-center text-sm" style={{ color: "var(--muted)" }}>Loading your outreach…</p> : filtered.length === 0 ? (
-              contacts.length === 0 && !search && filter === "all" ? (
-                <div className="px-4 py-16 text-center sm:py-20">
-                  <p className="text-[26px] font-medium tracking-[-0.01em]">No one on your list yet.</p>
-                  <p className="mx-auto mt-3 max-w-[420px] leading-relaxed" style={{ color: "var(--muted)" }}>Start with someone whose work you loved — add why them, what you’d send, and what comes next. Reach keeps the human thread.</p>
-                  <button onClick={() => openAdd()} className="mt-6 inline-flex min-h-[46px] items-center gap-2 rounded-[12px] px-5 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Plus size={17} /> Add contact</button>
-                </div>
-              ) : (
-                <div className="px-4 py-14 text-center"><p className="text-xl font-medium">No matches</p><p className="mt-2" style={{ color: "var(--muted)" }}>Try a different search or filter.</p><button onClick={() => { setSearch(""); setFilter("all"); }} className="mt-5 min-h-[44px] rounded-[12px] border px-4 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Clear search &amp; filters</button></div>
-              )
-            ) : filtered.map(c => {
-              const isSel = c.id === selectedId;
-              const norm = displayLink(c);
-              const _daysAgo = c.value.outreachDate ? Math.floor((new Date(`${todayISO()}T12:00:00`).getTime() - new Date(`${c.value.outreachDate}T12:00:00`).getTime()) / 86400000) : -1;
-              const _stage = c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp);
-              const _isDue = _stage === "follow-up" || (c.value.followUpDate ? c.value.followUpDate <= todayISO() && !["won","archived"].includes(_stage) : !c.value.replied && _daysAgo >= 4);
-              const _isDueToday = c.value.followUpDate === todayISO() || (!c.value.replied && _daysAgo === 0 && _stage === "to-reach");
-              return (
-                <article key={c.id} onClick={() => selectContact(c.id)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectContact(c.id); } }} tabIndex={0} aria-label={`Open details for ${c.value.name}`} className="relative cursor-pointer px-4 py-[14px] sm:px-5" style={{ background: isSel ? "var(--tint)" : "transparent", borderBottom: "1px solid var(--divider)" }}>
-                  <div className="flex flex-col gap-1 lg:grid lg:items-center lg:gap-4 lg:grid-cols-[minmax(200px,1.5fr)_minmax(180px,1.1fr)_88px_76px]">
-                    <div className="min-w-0">
-                      <h3 className="truncate text-[16px]" style={{ lineHeight: 1.3, fontWeight: isSel ? 600 : 500 }}>{c.value.name}</h3>
-                      <p className="truncate text-[13px]" style={{ color: "var(--muted)", lineHeight: 1.3 }}>{c.value.channel || "—"} <span className="mx-1">•</span> {c.value.outreachDate ? formatDate(c.value.outreachDate) : "—"}</p>
-                      <span className="mt-1.5 flex flex-wrap gap-1.5">
-                        <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "var(--tint)", color: "var(--text)" }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: STAGES.find(s => s.value === (c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp)))?.dot }} />{stageLabel(c.value.stage)}</span>
-                        {c.value.workType && <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{workTypeLabel(c.value.workType)}</span>}
-                        {_isDue && <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "#FFF0EE", color: "#DB200D" }}>Follow-up due • {_daysAgo}d</span>}
-                        {_isDueToday && <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "#FFF8E1", color: "#8A6D00" }}>Due today</span>}
-                      </span>
-                    </div>
-                    <div className="min-w-0"><p className="truncate text-left text-sm" title={c.value.nextStep || c.value.contactDetails || undefined} style={{ lineHeight: 1.3, color: (c.value.nextStep || c.value.contactDetails) ? undefined : "var(--muted)" }}>{c.value.nextStep || c.value.contactDetails || "—"}</p>{c.value.whyThem && <p className="truncate text-left text-[12px]" style={{ color: "var(--muted)" }}>{c.value.whyThem}</p>}</div>
-                    <div className="flex items-center justify-between gap-3 lg:contents">
-                      <div className="min-w-0 text-left">
-                        {norm ? <a href={norm} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="flex h-8 items-center gap-1 whitespace-nowrap text-sm font-medium" style={{ color: "var(--brand)", lineHeight: 1.3 }} aria-label={`Open link for ${c.value.name}`}>Link <ExternalLink size={13} /></a> : <span className="flex h-8 items-center text-sm" style={{ color: "var(--muted)", lineHeight: 1.3 }}>—</span>}
-                      </div>
-                      <div className="flex shrink-0 items-center justify-end gap-2 lg:w-[76px]" onClick={e => e.stopPropagation()}>
-                        <button onClick={() => openEdit(c)} aria-label={`Edit ${c.value.name}`} title={`Edit ${c.value.name}`} className="flex h-8 w-8 items-center justify-center rounded-[8px]"><Pencil size={15} /></button>
-                        <button onClick={() => setDeleteTarget(c)} aria-label={`Delete ${c.value.name}`} title={`Delete ${c.value.name}`} className="flex h-8 w-8 items-center justify-center rounded-[8px]"><Trash2 size={15} /></button>
-                      </div>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-          <footer className="mt-auto px-0 pt-8 pb-2 text-xs" style={{ color: "var(--muted)" }}>{counts.total} {counts.total === 1 ? "contact" : "contacts"} • Data saved to your private account</footer>
-          {showDeleteAll && (
-            <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Delete all my data">
-              <button aria-label="Close" onClick={() => setShowDeleteAll(false)} className="absolute inset-0 bg-black/35" />
-              <div className="relative w-full max-w-[460px] rounded-t-[16px] p-6 sm:rounded-[16px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-                <h2 className="text-[22px] font-semibold">Delete all my data?</h2>
-                <p className="mt-2 leading-relaxed" style={{ color: "var(--muted)" }}>This will permanently delete all your contacts, notes, templates and settings from your account. This cannot be undone. Your login account will remain, but with no data.</p>
-                <div className="mt-6 flex gap-2"><button onClick={() => setShowDeleteAll(false)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button onClick={handleDeleteAllMyData} disabled={deleteAllBusy} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{deleteAllBusy ? "Deleting…" : "Delete everything"}</button></div>
+          {view === "contacts" && (
+            <div style={{ marginTop: 32, maxWidth: 720 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                <div style={{ position: "relative", flex: 1, minWidth: 240 }}><Search size={17} style={{ position: "absolute", left: 16, top: 16, color: "var(--muted)" }} /><input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, notes, or link" aria-label="Search contacts" style={{ height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px 0 40px", background: "var(--surface)", fontSize: 15 }} />{search && <button onClick={() => setSearch("")} aria-label="Clear search" style={{ position: "absolute", right: 8, top: 8, width: 32, height: 32, borderRadius: "50%", background: "transparent", border: 0 }}><X size={16} /></button>}</div>
+                <div role="tablist" aria-label="Filter contacts" style={{ display: "flex", gap: 8 }}>{([{ v: "all", label: "All" }, { v: "to-reach", label: "To reach" }, { v: "follow-up", label: "Follow-up" }, { v: "won", label: "Won" }] as const).map((f) => (<button key={f.v} role="tab" aria-selected={filter === f.v} onClick={() => setFilter(f.v)} className="btn-press" style={{ height: 40, padding: "0 16px", borderRadius: 999, background: filter === f.v ? "var(--text)" : "transparent", color: filter === f.v ? "var(--bg)" : "var(--muted)", fontSize: 15, fontWeight: 500 }}>{f.label}</button>))}</div>
               </div>
+              <p className="caption" style={{ color: "var(--muted)", marginTop: 16 }}>{counts.total} contacts / {counts.due} due / {counts.won} won</p>
+              {loading ? (<div style={{ marginTop: 16 }}>{[0, 1, 2, 3, 4, 5].map((i) => (<div key={i} className="skeleton" style={{ height: 56, marginTop: 8 }} />))}</div>) : loadError ? (<div style={{ marginTop: 16, border: "1px solid var(--divider)", borderRadius: 12, padding: 24 }}><p className="body" style={{ fontWeight: 600 }}>Couldn&apos;t reach your saved contacts.</p><p className="body" style={{ color: "var(--muted)", marginTop: 8 }}>{loadError}</p><button onClick={loadAll} className="btn-press" style={{ marginTop: 16, minHeight: 40, padding: "0 16px", borderRadius: 12, border: "1px solid var(--divider)", background: "var(--surface)" }}>Try again</button></div>) : filtered.length === 0 ? (contacts.length === 0 && !search && filter === "all" ? (<div style={{ textAlign: "center", padding: 24, marginTop: 16 }}><p style={{ fontSize: 28, fontWeight: 600 }}>No one on your list yet.</p><p className="body" style={{ color: "var(--muted)", marginTop: 8 }}>Start with someone whose work you loved. Paste a handle, add why them, and pitch.</p><button onClick={() => captureRef.current?.focus()} className="btn-press" style={{ marginTop: 24, minHeight: 48, padding: "0 16px", borderRadius: 12, background: "var(--brand)", color: "white", fontWeight: 500 }}>Add contact</button></div>) : (<div style={{ textAlign: "center", padding: 24, marginTop: 16 }}><p className="body" style={{ fontWeight: 600 }}>No matches.</p><p className="body" style={{ color: "var(--muted)", marginTop: 8 }}>Try a different name or note.</p><button onClick={() => { setSearch(""); setFilter("all"); }} className="btn-press" style={{ marginTop: 16, minHeight: 44, padding: "0 16px", borderRadius: 12, border: "1px solid var(--divider)", background: "var(--surface)" }}>Clear search and filters</button></div>)) : (<div style={{ marginTop: 16, borderTop: "1px solid var(--divider)" }}>{filtered.map((c) => { const due = isFollowUpDue(c.value, today); return (<div key={c.id} onClick={() => selectContact(c.id)} style={{ minHeight: 56, display: "flex", alignItems: "center", gap: 16, padding: "8px 16px", borderBottom: "1px solid var(--divider)", background: c.id === selectedId ? "var(--surface-2)" : "transparent", cursor: "pointer" }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: stageColor(c.value.stage), flexShrink: 0 }} /><div style={{ flex: 1, minWidth: 0 }}><div className="body" style={{ fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.value.name}</div><div className="caption" style={{ color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{stageLabel(c.value.stage)} / {c.value.nextStep || c.value.whyThem || c.value.contactDetails || "Open to see context"}</div></div>{due ? <span style={{ fontSize: 12, fontWeight: 500, color: "var(--danger)", whiteSpace: "nowrap" }}>Due {c.value.followUpDate ? formatDate(c.value.followUpDate) : ""}</span> : null}{c.value.workType ? <span style={{ fontSize: 12, color: "var(--muted)", border: "1px solid var(--divider)", borderRadius: 999, padding: "8px", whiteSpace: "nowrap" }}>{c.value.workType}</span> : null}</div>); })}</div>)}
             </div>
           )}
         </section>
-        {isDesktop && (
-          <aside aria-label={selected ? "Contact details" : "Overview"} className="relative sticky flex shrink-0 flex-col border-l self-stretch" style={{ top: "calc(var(--safe-area-inset-top) + 69px)", minHeight: "calc(100vh - var(--safe-area-inset-top) - 69px)", width: minimized ? 56 : panelWidth, borderColor: "var(--divider)", background: "var(--bg)" }}>
-            {!minimized && (
-              <>
-                <div role="separator" aria-orientation="vertical" aria-label="Resize details panel" aria-valuenow={panelWidth} aria-valuemin={360} aria-valuemax={540} tabIndex={0} onKeyDown={e => { if (e.key === "ArrowLeft") setPanelWidth(w => Math.max(360, w - 20)); if (e.key === "ArrowRight") setPanelWidth(w => Math.min(540, w + 20)); }} onMouseDown={startResize} className="absolute bottom-0 left-0 top-0 z-10 flex w-[12px] -translate-x-[6px] cursor-ew-resize items-center justify-center opacity-0 hover:opacity-100 focus:opacity-100" style={{ background: "transparent" }}><span className="flex h-[44px] w-[8px] items-center justify-center rounded-full" style={{ background: "var(--divider)" }}><GripVertical size={12} style={{ color: "var(--muted)" }} /></span></div>
-                {panelHeader}
-                {selected ? (
-                  <div key={selected.id} className="animate-swap flex min-h-0 flex-1 flex-col">{panelContent}</div>
-                ) : (
-                  <div className="flex min-h-0 flex-1 flex-col">{emptyPanel}</div>
-                )}
-              </>
-            )}
-            {minimized && (
-              <div className="flex min-h-0 flex-1 flex-col items-center gap-4 py-4">
-                <button onClick={() => setMinimized(false)} className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]" aria-label="Expand details" title="Expand details"><ChevronUp size={18} className="-rotate-90" /></button>
-                <span className="small-caps" style={{ color: "var(--muted)", writingMode: "vertical-rl" }}>{selected ? "Details" : "Overview"}</span>
+
+        {selected && (
+          <aside style={{ width: isDesktopState ? 400 : "100%", flexShrink: 0, borderLeft: isDesktopState ? "1px solid var(--divider)" : "none", background: "var(--surface)", position: isDesktopState ? "sticky" : "fixed", top: isDesktopState ? 64 : 0, left: 0, right: 0, bottom: 0, zIndex: 40, height: isDesktopState ? "calc(100vh - 64px)" : "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 24px", borderBottom: "1px solid var(--divider)" }}><span className="small-caps" style={{ color: "var(--muted)" }}>Thread</span><button onClick={() => setSelectedId(null)} aria-label="Close thread" className="btn-press" style={{ width: 40, height: 40, borderRadius: 12, background: "transparent", border: 0, color: "var(--text)" }}><X size={18} /></button></div>
+            <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
+              <h2 className="display" style={{ fontSize: 28 }}>{selected.value.name}</h2>
+              <p className="caption" style={{ color: "var(--muted)", marginTop: 8 }}>{selected.value.channel} / Added {formatDate(selected.value.createdAt.slice(0, 10))}{selected.value.referredBy ? ` / Via ${selected.value.referredBy}` : ""}</p>
+              <div style={{ marginTop: 24, display: "flex", flexWrap: "wrap", gap: 8 }}>{STAGES.map((s) => { const active = selected.value.stage === s.value; return (<button key={s.value} onClick={() => setStage(selected, s.value)} aria-pressed={active} className="btn-press" style={{ minHeight: 32, padding: "0 16px", borderRadius: 999, border: "1px solid var(--divider)", background: active ? "var(--text)" : "transparent", color: active ? "var(--bg)" : "var(--muted)", fontSize: 12, fontWeight: 500 }}>{s.label}</button>); })}</div>
+              <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+                <div><label className="small-caps" style={{ color: "var(--muted)" }}>Contact</label><input value={contactDetailDraft} onChange={(e) => setContactDetailDraft(e.target.value)} onBlur={saveContactBasics} placeholder="@handle, email, or phone" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }} /></div>
+                <div><label className="small-caps" style={{ color: "var(--muted)" }}>Link</label><input value={contactLinkDraft} onChange={(e) => setContactLinkDraft(e.target.value)} onBlur={saveContactBasics} placeholder="https://..." style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }} />{safeHref(selected.value.link) ? <a href={safeHref(selected.value.link)} target="_blank" rel="noopener noreferrer" style={{ display: "block", marginTop: 8, fontSize: 12, color: "var(--text)", textDecoration: "underline" }}>Open link</a> : null}</div>
               </div>
-            )}
+              {selected.value.stage !== "to-reach" && (<div style={{ marginTop: 24, display: "flex", gap: 16, flexWrap: "wrap" }}><div style={{ flex: 1, minWidth: 160 }}><label className="small-caps" style={{ color: "var(--muted)" }}>Work type</label><select value={selected.value.workType} onChange={(e) => persistContact(selected, { ...selected.value, workType: e.target.value as WorkType })} style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }}><option value="">Select work</option>{WORK_TYPES.map((w) => (<option key={w.value} value={w.value}>{w.label}</option>))}</select></div>{(selected.value.stage === "in-conversation" || selected.value.stage === "follow-up") && (<div style={{ flex: 1, minWidth: 160 }}><label className="small-caps" style={{ color: "var(--muted)" }}>Follow-up date</label><input type="date" value={selected.value.followUpDate} onChange={(e) => persistContact(selected, { ...selected.value, followUpDate: e.target.value })} style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }} /></div>)}</div>)}
+              <div style={{ marginTop: 32 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span className="small-caps" style={{ color: "var(--muted)" }}>Thread / {selected.value.thread.length} entries</span><span className="caption" style={{ color: "var(--muted)" }}>Cmd + Enter saves</span></div>
+                <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 16 }}>{selected.value.thread.map((en) => (<div key={en.id} style={{ borderLeft: `2px solid ${en.kind === "win" ? "var(--brand)" : "var(--divider)"}`, paddingLeft: 16 }}><div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><span className="small-caps" style={{ color: "var(--muted)" }}>{threadLabel(en.kind)} / {formatDate(en.createdAt.slice(0, 10))}</span>{editingEntryId !== en.id && en.kind !== "created" && en.kind !== "stage" ? <button onClick={() => { setEditingEntryId(en.id); setEntryDraft(en.text); }} style={{ background: "transparent", border: 0, color: "var(--muted)", fontSize: 12, textDecoration: "underline" }}>Edit</button> : null}</div>{editingEntryId === en.id ? (<><textarea value={entryDraft} onChange={(e) => setEntryDraft(e.target.value)} rows={3} autoFocus placeholder="1 line. What matters?" style={{ marginTop: 8, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: 16, background: "var(--surface)", fontSize: 15, lineHeight: 1.8 }} />{entryError && <p role="alert" style={{ color: "var(--danger)", fontSize: 12, marginTop: 8 }}>{entryError}</p>}<div style={{ display: "flex", gap: 16, marginTop: 8 }}><button onClick={saveThreadEntry} className="btn-press" style={{ minHeight: 32, padding: "0 16px", borderRadius: 12, background: "var(--brand)", color: "white", fontSize: 12, fontWeight: 500 }}>Save</button><button onClick={() => setEditingEntryId(null)} style={{ background: "transparent", border: 0, color: "var(--muted)", fontSize: 12, textDecoration: "underline" }}>Cancel</button></div></>) : (<p className="body" style={{ marginTop: 8, lineHeight: 1.8 }}>{en.text}</p>)}</div>))}</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 24 }}>{([{ k: "why", label: "Add Why" }, { k: "sent", label: "Add Pitch sent" }, { k: "next", label: "Add Next step" }, { k: "note", label: "Add Note" }] as const).map((a) => (<button key={a.k} onClick={() => addThreadEntry(a.k)} className="btn-press" style={{ minHeight: 32, padding: "0 16px", borderRadius: 999, border: "1px solid var(--divider)", background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 500 }}>{a.label}</button>))}</div>
+              </div>
+              <div style={{ marginTop: 32 }}><p className="small-caps" style={{ color: "var(--muted)" }}>Pitch</p><div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>{templates.map((t) => { const active = t.id === activeTemplateId; return (<button key={t.id} onClick={() => setActiveTemplateId(active ? null : t.id)} aria-pressed={active} className="btn-press" style={{ minHeight: 32, padding: "0 16px", borderRadius: 999, border: "1px solid var(--divider)", background: active ? "var(--text)" : "transparent", color: active ? "var(--bg)" : "var(--muted)", fontSize: 12, fontWeight: 500 }}>{t.title}</button>); })}</div>{activeTemplate && (<div style={{ marginTop: 16, border: "1px solid var(--divider)", borderRadius: 12, padding: 16 }}><p className="body" style={{ whiteSpace: "pre-wrap", lineHeight: 1.8 }}>{activeTemplate.text.replace("[Name]", selected.value.name).replace("[detail]", selected.value.whyThem || "your recent work")}{selectedProof ? `\n\nProof: ${selectedProof.text} - ${selectedProof.name}${selectedProof.link ? ` (${selectedProof.link})` : ""}` : ""}</p><button onClick={() => copyText(activeTemplate.text.replace("[Name]", selected.value.name).replace("[detail]", selected.value.whyThem || "your recent work") + (selectedProof ? `\n\nProof: ${selectedProof.text} - ${selectedProof.name}` : ""), `template-${activeTemplate.id}`)} className="btn-press" style={{ marginTop: 16, minHeight: 40, padding: "0 16px", borderRadius: 12, background: "var(--brand)", color: "white", fontSize: 15, fontWeight: 500, display: "flex", alignItems: "center", gap: 8 }}>{copiedKey === `template-${activeTemplate.id}` ? <><Check size={16} /> Copied</> : <><Copy size={16} /> Copy pitch</>}</button><div style={{ marginTop: 16 }}><p className="small-caps" style={{ color: "var(--muted)" }}>Attach proof</p><div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>{proofStack.length === 0 ? <span className="caption" style={{ color: "var(--muted)" }}>No wins yet. Mark 1 contact Won to build Proof Stack.</span> : proofStack.map((p) => (<button key={p.id} onClick={() => setSelectedProofId(selectedProofId === p.id ? null : p.id)} className="btn-press" style={{ minHeight: 32, padding: "0 16px", borderRadius: 999, border: "1px solid var(--divider)", background: selectedProofId === p.id ? "var(--text)" : "transparent", color: selectedProofId === p.id ? "var(--bg)" : "var(--muted)", fontSize: 12 }}>{p.name}</button>))}</div></div></div>)}
+              </div>
+              {selected.value.stage === "won" && (<div style={{ marginTop: 32, border: "1px solid var(--divider)", borderRadius: 12, padding: 16 }}><p className="small-caps" style={{ color: "var(--muted)" }}>Win / Proof Stack</p><label className="small-caps" style={{ color: "var(--muted)", display: "block", marginTop: 16 }}>What worked?</label><textarea value={winDraft} onChange={(e) => setWinDraft(e.target.value)} rows={3} placeholder="They loved the editorial direction. Quick yes after 2nd follow-up." style={{ marginTop: 8, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: 16, background: "var(--surface)", fontSize: 15, lineHeight: 1.8 }} /><label className="small-caps" style={{ color: "var(--muted)", display: "block", marginTop: 16 }}>Who else should I reach? Handle or name</label><input value={winReferral} onChange={(e) => setWinReferral(e.target.value)} placeholder="@studio or Studio Name" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }} /><button onClick={saveWin} className="btn-press" style={{ marginTop: 16, minHeight: 44, padding: "0 16px", borderRadius: 12, background: "var(--brand)", color: "white", fontWeight: 500 }}>Save win</button></div>)}
+              <div style={{ marginTop: 32, display: "flex", gap: 16, paddingBottom: 24 }}><button onClick={() => markDone(selected)} className="btn-press" style={{ minHeight: 44, padding: "0 16px", borderRadius: 12, background: "var(--brand)", color: "white", fontWeight: 500 }}>Mark done</button><button onClick={() => snooze(selected)} className="btn-press" style={{ minHeight: 44, padding: "0 16px", borderRadius: 12, border: "1px solid var(--divider)", background: "transparent", color: "var(--text)" }}>Snooze 4 days</button><button onClick={() => archiveContact(selected)} className="btn-press" style={{ minHeight: 44, padding: "0 16px", borderRadius: 12, background: "transparent", border: 0, color: "var(--danger)", display: "flex", alignItems: "center", gap: 8 }}><Trash2 size={16} /> Archive</button></div>
+            </div>
           </aside>
         )}
       </main>
 
-      {!isDesktop && !settingsOpen && !modal && !deleteTarget && !showDeleteAll && (
-        <nav aria-label="Navigation" className="fixed bottom-4 left-1/2 z-40 flex w-[calc(100vw-32px)] max-w-[420px] -translate-x-1/2 items-center justify-between rounded-full border px-2 py-2" style={{ background: "var(--surface)", borderColor: "var(--divider)", boxShadow: "var(--shadow)" }}>
-          <button onClick={() => { setFilter("all"); setActiveFocus(null); setPanelOpen(false); setSelectedId(null); window.scrollTo({ top: 0, behavior: "smooth" }); }} aria-current={!panelOpen ? "page" : undefined} className="flex min-w-[72px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={!panelOpen ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>
-            <Home size={20} />
-            <span className="text-[11px] font-medium">Contacts</span>
-          </button>
-          <button onClick={() => { setPanelOpen(true); setMinimized(false); setSelectedId(null); setActiveTemplateId(null); }} aria-current={panelOpen && !selected ? "page" : undefined} className="flex min-w-[72px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={panelOpen && !selected ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>
-            <LayoutGrid size={20} />
-            <span className="text-[11px] font-medium">Overview</span>
-          </button>
-          <button onClick={() => openAdd()} aria-label="Add contact" className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}><Plus size={24} /></button>
-          <button onClick={() => openSettings("profile")} aria-label="Open settings" className="flex min-w-[72px] flex-col items-center gap-0.5 rounded-full px-3 py-1.5" style={{ color: "var(--muted)" }}>
-            {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" className="h-[24px] w-[24px] rounded-full object-cover" /> : <span className="flex h-[24px] w-[24px] items-center justify-center rounded-full text-[11px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }}>{headerInitials}</span>}
-            <span className="text-[11px] font-medium">You</span>
-          </button>
+      {!isDesktopState && !settingsOpen && !paletteOpen && (
+        <nav aria-label="Navigation" style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", zIndex: 40, display: "flex", alignItems: "center", justifyContent: "space-between", width: "calc(100vw - 32px)", maxWidth: 420, border: "1px solid var(--divider)", borderRadius: 999, padding: 8, background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+          <button onClick={() => { setView("queue"); setSelectedId(null); }} className="btn-press" style={{ minWidth: 72, padding: "8px 16px", borderRadius: 999, background: view === "queue" && !selected ? "var(--text)" : "transparent", color: view === "queue" && !selected ? "var(--bg)" : "var(--muted)", fontSize: 12, fontWeight: 500 }}>Queue</button>
+          <button onClick={() => { setView("contacts"); setSelectedId(null); }} className="btn-press" style={{ minWidth: 72, padding: "8px 16px", borderRadius: 999, background: view === "contacts" && !selected ? "var(--text)" : "transparent", color: view === "contacts" && !selected ? "var(--bg)" : "var(--muted)", fontSize: 12, fontWeight: 500 }}>Contacts</button>
+          <button onClick={() => captureRef.current?.focus()} aria-label="Add contact" className="btn-press" style={{ width: 52, height: 52, borderRadius: "50%", background: "var(--brand)", color: "white", border: 0 }}><Plus size={24} /></button>
+          <button onClick={() => { setProfileDraft(profile); setSettingsOpen(true); }} className="btn-press" style={{ minWidth: 72, padding: "8px 16px", borderRadius: 999, background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 500 }}>You</button>
         </nav>
       )}
 
-      {isTablet && panelOpen && !minimized && (
-        <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" aria-label={selected ? "Contact details" : "Overview"}>
-          <button aria-label={selected ? "Close details" : "Close overview"} onClick={closePanel} className="absolute inset-0 bg-black/30" />
-          <aside className="animate-fade relative flex w-[min(520px,92vw)] flex-col" style={{ background: "var(--surface)" }}>{panelHeader}{selected ? <div key={selected.id} className="animate-swap flex min-h-0 flex-1 flex-col">{panelContent}</div> : <div className="flex min-h-0 flex-1 flex-col">{emptyPanel}</div>}</aside>
-        </div>
-      )}
-
-      {isMobile && panelOpen && !minimized && (
-        <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={selected ? "Contact details" : "Overview"}>
-          <button aria-label={selected ? "Close details" : "Close overview"} onClick={closePanel} className="absolute inset-0 bg-black/30" />
-          <section className="absolute inset-x-0 bottom-0 flex flex-col overflow-hidden rounded-t-[16px]" style={{ height: `${sheetPct}vh`, background: "var(--surface)" }}>
-            <div onPointerDown={startSheetDrag} className="flex shrink-0 cursor-grab flex-col items-center gap-1 pt-2.5 pb-1 active:cursor-grabbing" aria-label="Drag to resize sheet"><span className="h-[4px] w-[40px] rounded-full" style={{ background: "var(--divider)" }} /><span className="text-xs" style={{ color: "var(--muted)" }}>Drag to resize</span></div>
-            {panelHeader}
-            <button onClick={() => setSheetPct(p => p > 60 ? 35 : 88)} className="flex min-h-[32px] shrink-0 items-center justify-center gap-1 text-xs font-medium" style={{ color: "var(--muted)" }}>{sheetPct > 60 ? <><ChevronDown size={15} /> Collapse sheet</> : <><ChevronUp size={15} /> Expand sheet</>}</button>
-            {selected ? <div key={selected.id} className="animate-swap flex min-h-0 flex-1 flex-col">{panelContent}</div> : <div className="flex min-h-0 flex-1 flex-col">{emptyPanel}</div>}
-          </section>
-        </div>
-      )}
-
-      {(isMobile || isTablet) && panelOpen && minimized && selected && (
-        <button onClick={() => setMinimized(false)} className="fixed bottom-24 left-4 right-4 z-40 flex min-h-[52px] items-center justify-between rounded-[14px] border px-4 text-left shadow-lg" style={{ background: "var(--surface)", borderColor: "var(--divider)" }}>
-          <span className="min-w-0"><span className="small-caps block" style={{ color: "var(--muted)" }}>Minimized</span><span className="block truncate font-medium">{selected.value.name}</span></span><span className="flex items-center gap-1 text-sm font-medium" style={{ color: "var(--brand)" }}><ChevronUp size={17} /> Expand</span>
-        </button>
-      )}
-
       {settingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Settings">
-          <button aria-label="Close settings" onClick={() => setSettingsOpen(false)} className="absolute inset-0 bg-black/35" />
-          <div className="animate-fade relative flex max-h-[88vh] w-full max-w-[620px] flex-col overflow-hidden rounded-t-[24px] sm:rounded-[24px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <div className="flex shrink-0 items-start justify-between gap-4 px-5 pt-5 sm:px-6 sm:pt-6"><div><p className="small-caps" style={{ color: "var(--muted)" }}>Settings</p><h2 className="mt-1 text-[20px] font-semibold leading-tight">Settings</h2></div><button onClick={() => setSettingsOpen(false)} aria-label="Close settings" className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]"><X size={19} /></button></div>
-            <div className="mx-5 mt-4 flex shrink-0 gap-1 rounded-full border p-1 sm:mx-6" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="tablist" aria-label="Settings tabs">
-              {(["profile", "shortcuts", "account"] as const).map(t => (
-                <button key={t} role="tab" aria-selected={settingsTab === t} onClick={() => setSettingsTab(t)} className="min-h-[40px] flex-1 rounded-full px-4 text-sm font-medium" style={settingsTab === t ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{t === "profile" ? "Profile" : t === "shortcuts" ? "Shortcuts" : "Account"}</button>
-              ))}
+        <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", justifyContent: "flex-end" }} role="dialog" aria-modal="true" aria-label="Settings">
+          <button aria-label="Close settings" onClick={() => setSettingsOpen(false)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", border: 0 }} />
+          <aside className="animate-drawer" style={{ position: "relative", width: "min(400px, 92vw)", background: "var(--surface)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 24px", borderBottom: "1px solid var(--divider)" }}><span className="small-caps" style={{ color: "var(--muted)" }}>Settings</span><button onClick={() => setSettingsOpen(false)} aria-label="Close settings" className="btn-press" style={{ width: 40, height: 40, borderRadius: 12, background: "transparent", border: 0 }}><X size={18} /></button></div>
+            <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
+              <section><p className="small-caps" style={{ color: "var(--muted)" }}>Profile</p><label className="small-caps" style={{ color: "var(--muted)", display: "block", marginTop: 16 }}>Name</label><input value={profileDraft.name} onChange={(e) => setProfileDraft({ ...profileDraft, name: e.target.value })} placeholder="Your name" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }} /><label className="small-caps" style={{ color: "var(--muted)", display: "block", marginTop: 16 }}>What I do</label><input value={profileDraft.whatIDo} onChange={(e) => setProfileDraft({ ...profileDraft, whatIDo: e.target.value })} placeholder="Visual designer, branding and editorial" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }} /><label className="small-caps" style={{ color: "var(--muted)", display: "block", marginTop: 16 }}>Open for</label><input value={profileDraft.openFor} onChange={(e) => setProfileDraft({ ...profileDraft, openFor: e.target.value })} placeholder="Branding, editorial, social" style={{ marginTop: 8, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }} /><button onClick={saveProfile} className="btn-press" style={{ marginTop: 16, minHeight: 44, padding: "0 16px", borderRadius: 12, background: "var(--brand)", color: "white", fontWeight: 500 }}>Save profile</button><p className="caption" style={{ color: "var(--muted)", marginTop: 8 }}>Signed in as {user?.email || "Signed in"}</p></section>
+              <section style={{ marginTop: 32 }}><p className="small-caps" style={{ color: "var(--muted)" }}>Proof Stack / {proofStack.length} wins</p>{proofStack.length === 0 ? <p className="body" style={{ color: "var(--muted)", marginTop: 16 }}>No wins yet. Mark 1 contact Won to build proof.</p> : proofStack.map((p) => (<div key={p.id} style={{ marginTop: 16, border: "1px solid var(--divider)", borderRadius: 12, padding: 16 }}><p className="body" style={{ fontWeight: 600 }}>{p.name}</p><p className="body" style={{ color: "var(--muted)", marginTop: 8 }}>{p.text}</p></div>))}</section>
+              <section style={{ marginTop: 32 }}><p className="small-caps" style={{ color: "var(--muted)" }}>Appearance</p><div style={{ marginTop: 16, display: "flex", gap: 8 }}>{(["system", "light", "dark"] as ThemeMode[]).map((m) => (<button key={m} onClick={() => { setThemeMode(m); saveSettings(m, templates, profile, selectedId).catch(() => {}); }} className="btn-press" style={{ minHeight: 40, padding: "0 16px", borderRadius: 999, background: themeMode === m ? "var(--text)" : "transparent", color: themeMode === m ? "var(--bg)" : "var(--muted)", border: "1px solid var(--divider)", fontSize: 15, textTransform: "capitalize" }}>{m}</button>))}</div><div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>{SHORTCUTS.map((s) => (<span key={s.label} style={{ fontSize: 12, color: "var(--muted)", border: "1px solid var(--divider)", borderRadius: 999, padding: "8px" }}>{s.keys} {s.label}</span>))}</div></section>
+              <section style={{ marginTop: 32 }}><p className="small-caps" style={{ color: "var(--muted)" }}>Data</p><button onClick={exportCSV} className="btn-press" style={{ marginTop: 16, minHeight: 44, padding: "0 16px", borderRadius: 12, border: "1px solid var(--divider)", background: "var(--surface)", display: "flex", alignItems: "center", gap: 8 }}><Download size={16} /> Export CSV</button><button onClick={async () => { setSettingsOpen(false); await supabase.auth.signOut(); setContacts([]); setSelectedId(null); }} className="btn-press" style={{ marginTop: 8, minHeight: 44, padding: "0 16px", borderRadius: 12, border: "1px solid var(--divider)", background: "transparent", color: "var(--text)" }}>Sign out</button>{!showDeleteAll ? <button onClick={() => setShowDeleteAll(true)} style={{ marginTop: 16, background: "transparent", border: 0, color: "var(--danger)", fontSize: 12, textDecoration: "underline" }}>Delete all my data</button> : (<div style={{ marginTop: 16, border: "1px solid var(--divider)", borderRadius: 12, padding: 16 }}><p className="body" style={{ fontWeight: 600 }}>Delete all my data?</p><p className="body" style={{ color: "var(--muted)", marginTop: 8 }}>Type DELETE to confirm. This cannot be undone.</p><input value={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.value)} placeholder="Type DELETE" style={{ marginTop: 16, height: 48, width: "100%", borderRadius: 12, border: "1px solid var(--divider)", padding: "0 16px", background: "var(--surface)", fontSize: 15 }} /><div style={{ display: "flex", gap: 8, marginTop: 16 }}><button onClick={() => { setShowDeleteAll(false); setDeleteConfirm(""); }} className="btn-press" style={{ flex: 1, minHeight: 44, borderRadius: 12, border: "1px solid var(--divider)", background: "transparent" }}>Cancel</button><button onClick={deleteAll} disabled={deleteConfirm !== "DELETE" || deleteAllBusy} className="btn-press" style={{ flex: 1, minHeight: 44, borderRadius: 12, background: "var(--danger)", color: "white", opacity: deleteConfirm !== "DELETE" ? 0.5 : 1 }}>{deleteAllBusy ? "Deleting." : "Delete everything"}</button></div></div>)}</section>
             </div>
-            <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-5 sm:px-6">
-            {settingsTab === "profile" ? (
-              <div className="pt-5">
-                {/* Top row — avatar left, Save pill right */}
-                <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" aria-label="Choose profile photo" onChange={e => { const f = e.target.files?.[0]; if (f) handleAvatarFile(f); e.target.value = ""; }} />
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    {profileDraft.avatarUrl ? <img src={profileDraft.avatarUrl} alt="Your profile photo" className="h-[56px] w-[56px] shrink-0 rounded-full object-cover" /> : <span className="flex h-[56px] w-[56px] shrink-0 items-center justify-center rounded-full text-[20px] font-semibold" style={{ background: "#0D0D0C", color: "#F0EBE7" }} aria-hidden="true">{draftInitials}</span>}
-                    <div className="flex flex-col gap-1">
-                      <button onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading} className="min-h-[36px] rounded-full border px-4 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--divider)" }}>{avatarUploading ? "Uploading…" : profileDraft.avatarUrl ? "Change photo" : "Upload photo"}</button>
-                      {profileDraft.avatarUrl && <button onClick={handleRemoveAvatar} disabled={avatarUploading} className="min-h-[32px] text-xs font-medium underline underline-offset-4 disabled:opacity-50" style={{ color: "var(--muted)" }}>Remove photo</button>}
-                    </div>
-                  </div>
-                  <button onClick={saveProfile} className="flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-full px-5 text-sm font-medium text-white" style={{ background: "#DB200D" }}><Check size={15} /> Save</button>
-                </div>
-                <p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>JPG, PNG or WebP, under 5MB. Saved to your private Supabase account, not on the main screen.</p>
+          </aside>
+        </div>
+      )}
 
-                {/* Big title — name in red + email below */}
-                <div className="mt-5">
-                  <h3 className="text-[32px] font-semibold leading-[1.02] tracking-[-0.02em]" style={{ color: "#DB200D" }}>{profileDraft.name?.trim() ? profileDraft.name.trim() : "Your profile"}</h3>
-                  <p className="mt-2 truncate text-[26px] font-semibold leading-tight tracking-[-0.01em]">{user?.email || "Signed in"}</p>
-                  <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>This is how you show up in Reach — your studio card. Your name and photo stay private, but your what-I-do and featured work shape every pitch you send.</p>
-                </div>
-
-                {/* Two cards — Reach counts only */}
-                <div className="mt-6 grid grid-cols-2 gap-3">
-                  <div className="rounded-[20px] border p-4" style={{ borderColor: "var(--divider)" }}>
-                    <p className="text-[13px]" style={{ color: "var(--muted)" }}>Contacts</p>
-                    <p className="mt-2 text-[28px] font-semibold leading-none">{counts.total}</p>
-                    <div className="mt-4 flex items-center justify-between">
-                      <span className="flex h-[32px] w-[32px] items-center justify-center rounded-full" style={{ background: "var(--tint)" }}><Users size={16} /></span>
-                      <span className="rounded-full border px-2.5 py-1 text-xs font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>Total</span>
-                    </div>
-                  </div>
-                  <div className="rounded-[20px] border p-4" style={{ borderColor: "var(--divider)" }}>
-                    <p className="text-[13px]" style={{ color: "var(--muted)" }}>Replied</p>
-                    <p className="mt-2 text-[28px] font-semibold leading-none">{counts.replied}</p>
-                    <div className="mt-4 flex items-center justify-between">
-                      <span className="flex h-[32px] w-[32px] items-center justify-center rounded-full" style={{ background: "var(--tint)" }}><Check size={16} /></span>
-                      <span className="rounded-full border px-2.5 py-1 text-xs font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{counts.total > 0 ? `${Math.round((counts.replied / counts.total) * 100)}%` : "0%"}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-6 border-t" style={{ borderColor: "var(--divider)" }} />
-
-                {/* Four quick actions — Reach actions */}
-                <div className="mt-5 grid grid-cols-4 gap-2">
-                  <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading} className="flex flex-col items-center gap-2 py-1 disabled:opacity-60">
-                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full text-white" style={{ background: "#DB200D" }}>{profileDraft.avatarUrl ? <img src={profileDraft.avatarUrl} alt="" className="h-[56px] w-[56px] rounded-full object-cover" /> : <Camera size={20} />}</span>
-                    <span className="text-[12px] font-medium">{avatarUploading ? "Uploading…" : "Photo"}</span>
-                  </button>
-                  <button type="button" onClick={() => document.getElementById("profile-name")?.focus()} className="flex flex-col items-center gap-2 py-1">
-                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }}><Pencil size={19} /></span>
-                    <span className="text-[12px] font-medium">Name</span>
-                  </button>
-                  <button type="button" onClick={() => document.getElementById("profile-socials")?.scrollIntoView({ behavior: "smooth", block: "start" })} className="flex flex-col items-center gap-2 py-1">
-                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }}><Link2 size={19} /></span>
-                    <span className="text-[12px] font-medium">Socials</span>
-                  </button>
-                  <button type="button" onClick={() => changeTheme(themeMode === "light" ? "dark" : themeMode === "dark" ? "system" : "light")} className="flex flex-col items-center gap-2 py-1">
-                    <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full border" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }}>{themeMode === "dark" ? <Moon size={19} /> : <Sun size={19} />}</span>
-                    <span className="text-[12px] font-medium">Theme</span>
-                  </button>
-                </div>
-
-                {/* Soft banner — Reach tip */}
-                <div className="mt-6 flex items-center justify-between gap-3 rounded-[20px] p-4" style={{ background: "var(--tint)" }}>
-                  <p className="text-sm leading-relaxed">{profileDraft.avatarUrl ? "Photo ready. Tap Save profile to keep it, or Change photo to pick another." : "Add a photo, name and a social so your profile feels finished. Your photo is only for you."}</p>
-                  <button onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading} className="shrink-0 rounded-full px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60" style={{ background: "#DB200D" }}>{avatarUploading ? "Uploading…" : "Add photo"}</button>
-                </div>
-
-                {/* Name field */}
-                <div className="mt-7"><label htmlFor="profile-name" className="small-caps block" style={{ color: "var(--muted)" }}>Name</label><input id="profile-name" value={profileDraft.name} onChange={e => setProfileDraft(d => ({ ...d, name: e.target.value }))} placeholder="Your name" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-
-                {/* Creative identity — your pitch card */}
-                <div className="mt-6 rounded-[20px] border p-4" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }}>
-                  <p className="small-caps" style={{ color: "var(--muted)" }}>Your pitch card — how you show up</p>
-                  <div className="mt-4 space-y-3">
-                    <div><label htmlFor="profile-what" className="small-caps block" style={{ color: "var(--muted)" }}>What I do</label><input id="profile-what" value={profileDraft.whatIDo || ""} onChange={e => setProfileDraft(d => ({ ...d, whatIDo: e.target.value }))} placeholder="Visual designer — branding, editorial, social" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-                    <div><label htmlFor="profile-open" className="small-caps block" style={{ color: "var(--muted)" }}>Open for</label><input id="profile-open" value={profileDraft.openFor || ""} onChange={e => setProfileDraft(d => ({ ...d, openFor: e.target.value }))} placeholder="Branding for studios, editorial collabs…" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-                    <div><label htmlFor="profile-featured" className="small-caps block" style={{ color: "var(--muted)" }}>Featured work</label><input id="profile-featured" value={profileDraft.featuredLink || ""} onChange={e => setProfileDraft(d => ({ ...d, featuredLink: e.target.value }))} placeholder="https://your-portfolio.com/best-work" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-                  </div>
-                  {(profileDraft.whatIDo || profileDraft.openFor || profileDraft.featuredLink) && (
-                    <div className="mt-4 rounded-[16px] border p-4" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-                      <p className="text-[15px] font-semibold">{profileDraft.name || "You"}</p>
-                      {profileDraft.whatIDo && <p className="mt-1 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>{profileDraft.whatIDo}</p>}
-                      {profileDraft.openFor && <p className="mt-1 text-xs font-medium" style={{ color: "var(--brand)" }}>Open for: {profileDraft.openFor}</p>}
-                      {profileDraft.featuredLink && <a href={safeHref(profileDraft.featuredLink) || "#"} target="_blank" rel="noopener noreferrer" className="mt-2 block truncate text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>{profileDraft.featuredLink}</a>}
-                    </div>
-                  )}
-                  <p className="mt-3 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>This is the card that travels with your pitches. Keep it honest and specific — one line about what you do beats a list.</p>
-                </div>
-
-                {/* Socials — card style */}
-                <div id="profile-socials" className="mt-8 scroll-mt-4">
-                  <h3 className="text-[16px] font-semibold">Link social accounts</h3>
-                  <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Add a handle or a full URL for each account. Linked accounts save with your profile.</p>
-                  <div className="mt-4 space-y-3">
-                    {profileDraft.socials.map(s => s.custom ? (
-                      <div key={s.id} className="space-y-2 rounded-[16px] border p-3" style={{ borderColor: "var(--divider)" }}>
-                        <div className="flex gap-2">
-                          <input aria-label="Platform name" value={s.platform} onChange={e => updateSocial(s.id, "platform", e.target.value)} placeholder="Platform name" className="h-[48px] min-w-0 flex-1 rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-                          <button onClick={() => removeCustomSocial(s.id)} aria-label="Remove custom platform" className="flex min-h-[44px] shrink-0 items-center rounded-[10px] border px-3 text-sm font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>Remove</button>
-                        </div>
-                        <input aria-label={`Handle or URL for ${s.platform || "custom platform"}`} value={s.value} onChange={e => updateSocial(s.id, "value", e.target.value)} placeholder="@handle or https://..." className="h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-                      </div>
-                    ) : (
-                      <div key={s.id} className="rounded-[16px] border p-3" style={{ borderColor: "var(--divider)" }}>
-                        <label htmlFor={`social-${s.id}`} className="small-caps block" style={{ color: "var(--muted)" }}>{s.platform}</label>
-                        <input id={`social-${s.id}`} value={s.value} onChange={e => updateSocial(s.id, "value", e.target.value)} placeholder={socialPlaceholder(s.platform)} className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-                      </div>
-                    ))}
-                  </div>
-                  <button onClick={addCustomSocial} className="mt-4 min-h-[40px] rounded-[10px] border px-4 text-sm font-medium" style={{ borderColor: "var(--divider)" }}>+ Add another</button>
-                  {linkedSocials.length > 0 && (
-                    <div className="mt-6 rounded-[20px] border p-4" style={{ borderColor: "var(--divider)" }}>
-                      <div className="flex items-start gap-3">
-                        <span className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-full" style={{ background: "var(--tint)" }}><AtSign size={17} /></span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[15px] font-semibold">Linked accounts</p>
-                          <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>{linkedSocials.length} {linkedSocials.length === 1 ? "account" : "accounts"} linked. Tap one to open it.</p>
-                          <ul className="mt-3 space-y-2">
-                            {linkedSocials.map(s => (
-                              <li key={s.id} className="flex items-center justify-between gap-3 border-t py-2.5" style={{ borderColor: "var(--divider)" }}>
-                                <span className="text-sm font-medium">{s.platform || "Custom platform"}</span>
-                                <a href={socialHref(s.platform, s.value)} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate text-sm font-medium underline decoration-1 underline-offset-4" style={{ color: "var(--brand)" }}>{socialDisplay(s.platform, s.value)}</a>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div className="mt-8 flex gap-2"><button onClick={() => setSettingsOpen(false)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button onClick={saveProfile} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white" style={{ background: "#DB200D" }}>Save profile</button></div>
-              </div>
-            ) : settingsTab === "shortcuts" ? (
-              <div className="pt-2">
-                <p className="mt-4 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>Shortcuts pause while typing, except Esc, Ctrl/Cmd + Enter, and Ctrl/Cmd shortcuts like Ctrl/Cmd + E. Press Esc while typing to blur the field, then shortcuts work again. Press <span className="font-medium" style={{ color: "var(--text)" }}>?</span> to open this tab.</p>
-                {SHORTCUT_GROUPS.map(g => (
-                  <div key={g.group} className="mt-7">
-                    <p className="small-caps" style={{ color: "var(--muted)" }}>{g.group}</p>
-                    <div className="mt-2 border-t" style={{ borderColor: "var(--divider)" }}>
-                      {g.items.map(item => {
-                        const isCapturing = capturing === item.action;
-                        return (
-                          <div key={item.action} className="flex min-h-[48px] items-center justify-between gap-3 border-b py-2" style={{ borderColor: "var(--divider)" }}>
-                            <span className="min-w-0 text-sm">{item.label}</span>
-                            <span className="flex shrink-0 items-center gap-2">
-                              <span className="inline-flex min-h-[28px] items-center rounded-full border px-2.5 text-xs font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{isCapturing ? "Press a key…" : displayShortcut(shortcuts[item.action])}{item.action === "next" ? " / ↓" : item.action === "prev" ? " / ↑" : ""}</span>
-                              <button onClick={() => setCapturing(isCapturing ? null : item.action)} className="min-h-[32px] rounded-full border px-3 text-xs font-medium" style={{ borderColor: "var(--divider)" }}>{isCapturing ? "Cancel" : "Change"}</button>
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-                {capturing && <p role="status" className="mt-4 text-sm" style={{ color: "var(--muted)" }}>Press a key… Esc cancels.</p>}
-                <div className="mt-6 flex gap-2"><button onClick={resetShortcuts} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Reset to defaults</button><button onClick={saveShortcuts} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white" style={{ background: "#DB200D" }}>Save shortcuts</button></div>
-              </div>
-            ) : (
-              <div className="pt-6">
-                <h3 className="text-[16px] font-semibold">Account</h3>
-                <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Your login and your data live here. Nothing about your account shows on the main screen.</p>
-                <div className="mt-5">
-                  <p className="small-caps" style={{ color: "var(--muted)" }}>Appearance</p>
-                  <div className="mt-2 flex rounded-[12px] border p-1" style={{ borderColor: "var(--divider)", background: "var(--bg-soft)" }} role="group" aria-label="Theme">
-                    {([{ v: "system", label: "System" }, { v: "light", label: "Light" }, { v: "dark", label: "Dark" }] as const).map(({ v, label }) => (
-                      <button key={v} onClick={() => changeTheme(v)} aria-pressed={themeMode === v} className="min-h-[40px] flex-1 rounded-[9px] px-2 text-sm font-medium" style={themeMode === v ? { background: "var(--text)", color: "var(--bg)" } : { color: "var(--muted)" }}>{label}</button>
-                    ))}
-                  </div>
-                </div>
-                <div className="mt-5 rounded-[12px] border p-4" style={{ borderColor: "var(--divider)" }}>
-                  <p className="small-caps" style={{ color: "var(--muted)" }}>Signed in as</p>
-                  <p className="mt-2 truncate text-[15px] font-medium">{user?.email || "Signed in"}</p>
-                  <p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>{counts.total} {counts.total === 1 ? "contact" : "contacts"} • Data saved to your private account</p>
-                </div>
-                <div className="mt-4 flex flex-col gap-2">
-                  <button onClick={handleSignOut} className="min-h-[46px] w-full rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Sign out</button>
-                  <button onClick={() => { setSettingsOpen(false); setShowDeleteAll(true); }} className="min-h-[46px] w-full rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)", color: "#DB200D" }}>Delete all my data…</button>
-                </div>
-                <p className="mt-4 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Deleting removes all your contacts, notes, templates and settings from this account. Your login stays, but with no data. This cannot be undone.</p>
-              </div>
-            )}
-          </div>
+      {paletteOpen && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", justifyContent: "center", paddingTop: 96 }} role="dialog" aria-modal="true" aria-label="Command palette">
+          <button aria-label="Close palette" onClick={() => setPaletteOpen(false)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.35)", border: 0 }} />
+          <div className="animate-fade" style={{ position: "relative", width: "min(560px, 92vw)", background: "var(--surface)", borderRadius: 16, boxShadow: "var(--shadow)", overflow: "hidden", height: "fit-content" }}>
+            <div style={{ padding: 16, borderBottom: "1px solid var(--divider)", display: "flex", alignItems: "center", gap: 8 }}><Search size={17} style={{ color: "var(--muted)" }} /><input ref={paletteRef} value={paletteQuery} onChange={(e) => setPaletteQuery(e.target.value)} placeholder="Search contacts, or type a handle to create" autoFocus style={{ flex: 1, border: 0, outline: "none", background: "transparent", fontSize: 15, color: "var(--text)" }} /></div>
+            <div style={{ maxHeight: 320, overflowY: "auto" }}>
+              <button onClick={() => { setPaletteOpen(false); setView("queue"); }} style={{ width: "100%", textAlign: "left", padding: 16, background: "transparent", border: 0, borderBottom: "1px solid var(--divider)" }}><span className="body" style={{ fontWeight: 500 }}>Go to Queue</span><span className="caption" style={{ color: "var(--muted)", display: "block", marginTop: 8 }}>Cmd + K / Queue</span></button>
+              <button onClick={() => { setPaletteOpen(false); setView("contacts"); }} style={{ width: "100%", textAlign: "left", padding: 16, background: "transparent", border: 0, borderBottom: "1px solid var(--divider)" }}><span className="body" style={{ fontWeight: 500 }}>Go to Contacts</span><span className="caption" style={{ color: "var(--muted)", display: "block", marginTop: 8 }}>Cmd + K / Contacts</span></button>
+              {paletteResults.map((c) => (<button key={c.id} onClick={() => { setPaletteOpen(false); selectContact(c.id); setView("contacts"); }} style={{ width: "100%", textAlign: "left", padding: 16, background: "transparent", border: 0, borderBottom: "1px solid var(--divider)", display: "flex", alignItems: "center", gap: 16 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: stageColor(c.value.stage) }} /><span style={{ flex: 1, minWidth: 0 }}><span className="body" style={{ fontWeight: 500, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.value.name}</span><span className="caption" style={{ color: "var(--muted)" }}>{stageLabel(c.value.stage)}</span></span><ChevronDown size={16} style={{ transform: "rotate(-90deg)", color: "var(--muted)" }} /></button>))}
+              {paletteQuery.trim() && (<button onClick={() => { setPasteText(paletteQuery); setPaletteOpen(false); setTimeout(() => captureRef.current?.focus(), 100); }} style={{ width: "100%", textAlign: "left", padding: 16, background: "transparent", border: 0 }}><span className="body" style={{ fontWeight: 500 }}>Create contact: {paletteQuery}</span><span className="caption" style={{ color: "var(--muted)", display: "block", marginTop: 8 }}>Enter to add to To-Reach</span></button>)}
+            </div>
+            <div style={{ padding: 16, borderTop: "1px solid var(--divider)", display: "flex", gap: 16 }}><span className="caption" style={{ color: "var(--muted)" }}>Cmd + K palette</span><span className="caption" style={{ color: "var(--muted)" }}>/ Search</span><span className="caption" style={{ color: "var(--muted)" }}>N New</span><span className="caption" style={{ color: "var(--muted)" }}>Esc Close</span></div>
           </div>
         </div>
       )}
 
-      {modal && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={modal.mode === "add" ? "Add contact" : "Edit contact"}>
-          <button aria-label="Close dialog" onClick={() => !busy && setModal(null)} className="absolute inset-0 bg-black/35" />
-          <div ref={formRef} className="animate-fade relative flex max-h-[88vh] w-full max-w-[620px] flex-col overflow-hidden rounded-t-[16px] sm:rounded-[16px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <div className="flex shrink-0 items-start justify-between gap-4 px-5 pt-4 sm:px-6 sm:pt-5"><div><p className="small-caps" style={{ color: "var(--muted)" }}>{modal.mode === "add" ? "New outreach" : "Edit contact"}</p><h2 className="mt-1 text-[20px] font-semibold leading-tight">{modal.mode === "add" ? "Add contact" : `Edit ${modal.contact.value.name}`}</h2></div><button onClick={() => setModal(null)} aria-label="Close form" className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-[10px]"><X size={19} /></button></div>
-            <form className="flex min-h-0 flex-1 flex-col" onSubmit={e => { e.preventDefault(); submitForm(); }}>
-              <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6 space-y-3">
-              <div><label htmlFor="f-name" className="small-caps block" style={{ color: "var(--muted)" }}>Name *</label><input id="f-name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required placeholder="Full name or studio" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div><label htmlFor="f-channel" className="small-caps block" style={{ color: "var(--muted)" }}>Channel</label><input id="f-channel" list="channel-suggestions" value={form.channel} onChange={e => setForm({ ...form, channel: e.target.value })} placeholder="Instagram, Email, Studio…" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><datalist id="channel-suggestions"><option value="Instagram" /><option value="X (Twitter)" /><option value="TikTok" /><option value="YouTube" /><option value="LinkedIn" /><option value="Behance" /><option value="Dribbble" /><option value="Pinterest" /><option value="WhatsApp" /><option value="Telegram" /><option value="Email" /><option value="Website" /><option value="Portfolio" /><option value="Studio visit" /></datalist></div>
-                <div><label htmlFor="f-date" className="small-caps block" style={{ color: "var(--muted)" }}>Outreach date</label><input id="f-date" type="date" value={form.outreachDate} onChange={e => setForm({ ...form, outreachDate: e.target.value })} className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-              </div>
-              <div><label htmlFor="f-details" className="small-caps block" style={{ color: "var(--muted)" }}>Contact details</label><input id="f-details" value={form.contactDetails} onChange={e => setForm({ ...form, contactDetails: e.target.value })} placeholder="@handle, email, or phone" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-              <div><label htmlFor="f-link" className="small-caps block" style={{ color: "var(--muted)" }}>Link</label><input id="f-link" value={form.link} onChange={e => setForm({ ...form, link: e.target.value })} placeholder="https://…" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Tip: just type a handle or a domain slash handle — we will complete it using the channel.</p>{showPreview && <p className="mt-1 break-all text-xs leading-relaxed" style={{ color: "var(--muted)" }}>Will save as: <a href={previewLink} target="_blank" rel="noopener noreferrer" className="font-medium underline underline-offset-2" style={{ color: "var(--brand)" }}>{previewLink}</a></p>}</div>
-              <div>
-                <label className="small-caps block" style={{ color: "var(--muted)" }}>Journey — where is this?</label>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {STAGES.map(s => <button key={s.value} type="button" onClick={() => setForm({ ...form, stage: s.value })} aria-pressed={form.stage === s.value} className="min-h-[36px] rounded-full border px-3 text-xs font-medium" style={form.stage === s.value ? { background: "var(--text)", color: "var(--bg)", borderColor: "var(--text)" } : { borderColor: "var(--divider)", color: "var(--muted)" }}>{s.label}</button>)}
-                </div>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div><label htmlFor="f-worktype" className="small-caps block" style={{ color: "var(--muted)" }}>Work type</label><select id="f-worktype" value={form.workType} onChange={e => setForm({ ...form, workType: e.target.value as WorkType })} className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }}>{WORK_TYPES.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}</select></div>
-                <div><label htmlFor="f-followup" className="small-caps block" style={{ color: "var(--muted)" }}>Follow-up date</label><input id="f-followup" type="date" value={form.followUpDate} onChange={e => setForm({ ...form, followUpDate: e.target.value })} className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-              </div>
-              <div><label htmlFor="f-why" className="small-caps block" style={{ color: "var(--muted)" }}>What caught your eye?</label><textarea id="f-why" value={form.whyThem} onChange={e => setForm({ ...form, whyThem: e.target.value })} rows={2} placeholder="Loved their recent branding — the way they handled type stayed with me…" className="mt-2 w-full resize-y rounded-[12px] border px-3.5 py-3 text-[15px] leading-relaxed" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div><label htmlFor="f-sent" className="small-caps block" style={{ color: "var(--muted)" }}>Pitch you sent</label><input id="f-sent" value={form.whatSent} onChange={e => setForm({ ...form, whatSent: e.target.value })} placeholder="Intro + 2 branding pieces" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-                <div><label htmlFor="f-next" className="small-caps block" style={{ color: "var(--muted)" }}>Next step</label><input id="f-next" value={form.nextStep} onChange={e => setForm({ ...form, nextStep: e.target.value })} placeholder="Follow up in 4 days with idea" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
-              </div>
-              <div><label htmlFor="f-featured" className="small-caps block" style={{ color: "var(--muted)" }}>Featured work for them</label><input id="f-featured" value={form.featuredLink} onChange={e => setForm({ ...form, featuredLink: e.target.value })} placeholder="https://your-portfolio.com/work" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>This piece travels with your pitch. Leave it as your profile featured work, or pick a piece that fits them.</p></div>
-              <div><label htmlFor="f-notes" className="small-caps block" style={{ color: "var(--muted)" }}>Notes</label><textarea id="f-notes" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3} placeholder="Context, next step…" className="mt-2 w-full resize-y rounded-[12px] border px-3.5 py-3 text-[15px] leading-relaxed" style={{ borderColor: "var(--divider)", background: "var(--input)", minHeight: 84 }} /></div>
-              </div>
-              <div className="shrink-0 border-t px-5 py-3 sm:px-6" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-                {formError && <p role="alert" className="mb-2 text-sm font-medium" style={{ color: "#DB200D" }}>{formError}</p>}
-                <div className="flex gap-2"><button type="button" onClick={() => setModal(null)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button type="submit" disabled={busy || !form.name.trim()} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{busy ? "Saving…" : modal.mode === "add" ? "Add contact" : "Save changes"}</button></div>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Delete contact">
-          <button aria-label="Close delete dialog" onClick={() => setDeleteTarget(null)} className="absolute inset-0 bg-black/35" />
-          <div className="relative w-full max-w-[460px] rounded-t-[16px] p-6 sm:rounded-[16px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <div className="flex h-[44px] w-[44px] items-center justify-center rounded-full" style={{ background: "var(--tint)" }}><Trash2 size={19} style={{ color: "#DB200D" }} /></div>
-            <h2 className="mt-4 text-[22px] font-semibold">Archive {deleteTarget.value.name}? You can undo for 5 seconds.</h2>
-            <p className="mt-2 leading-relaxed" style={{ color: "var(--muted)" }}>This archives the contact. Tap Undo in the bar below within 5 seconds to bring it back. Purged after 30 days in Settings &gt; Account.</p>
-            <div className="mt-6 flex gap-2"><button onClick={() => setDeleteTarget(null)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button onClick={confirmDelete} disabled={busy} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{busy ? "Deleting…" : "Delete"}</button></div>
-          </div>
-        </div>
-      )}
-
-      {pendingDelete && (
-        <div role="status" className="toast-in fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-full px-4 py-3 text-sm font-medium text-white shadow-lg" style={{ background: "#0D0D0C" }}>
-          <span>Archived {pendingDelete.contact.value.name}.</span>
-          <button onClick={undoDelete} className="min-h-[32px] rounded-full bg-white px-3 text-xs font-semibold text-black">Undo</button>
-        </div>
-      )}
-      {winModal && winContact && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Save win">
-          <button aria-label="Close win dialog" onClick={() => { setWinModal(false); setWinContact(null); }} className="absolute inset-0 bg-black/35" />
-          <div className="relative w-full max-w-[520px] rounded-t-[16px] p-6 sm:rounded-[16px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <h2 className="text-[22px] font-semibold">Win: {winContact.value.name}</h2>
-            <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>What worked? Who else should you reach? This builds your Proof Stack.</p>
-            <label className="small-caps mt-5 block" style={{ color: "var(--muted)" }}>What worked?</label>
-            <textarea value={winNote} onChange={e => setWinNote(e.target.value)} rows={3} placeholder="They loved the editorial direction. Quick yes after 2nd follow-up." className="mt-2 w-full rounded-[12px] border px-3.5 py-3 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-            <label className="small-caps mt-4 block" style={{ color: "var(--muted)" }}>Who else should I reach? (handle or name)</label>
-            <input value={winReferral} onChange={e => setWinReferral(e.target.value)} placeholder="@studio or Studio Name" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-            <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>Referral will be added to To-Reach as Via {winContact.value.name}.</p>
-            <div className="mt-6 flex gap-2"><button onClick={() => { setWinModal(false); setWinContact(null); }} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Skip</button><button onClick={saveWinLoop} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white" style={{ background: "var(--brand)" }}>Save win</button></div>
-          </div>
-        </div>
-      )}
-      {toast && <div role="status" className="toast-in fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full px-4 py-3 text-sm font-medium text-white shadow-lg" style={{ background: "#0D0D0C" }}><Check size={16} /> {toast}</div>}
+      {toast && (<div role="status" className="toast-in" style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 70, display: "flex", alignItems: "center", gap: 8, borderRadius: 999, padding: "16px", background: "#0D0D0C", color: "white", fontSize: 15, fontWeight: 500, boxShadow: "var(--shadow)", whiteSpace: "nowrap" }}><Check size={16} /> {toast}</div>)}
+      {pendingArchive && (<div role="status" className="toast-in" style={{ position: "fixed", bottom: 80, left: "50%", transform: "translateX(-50%)", zIndex: 70, display: "flex", alignItems: "center", gap: 16, borderRadius: 999, padding: "16px", background: "#0D0D0C", color: "white", fontSize: 15, fontWeight: 500, boxShadow: "var(--shadow)", whiteSpace: "nowrap" }}><span>Archived {pendingArchive.contact.value.name}.</span><button onClick={undoArchive} style={{ minHeight: 32, padding: "0 16px", borderRadius: 999, background: "white", color: "black", fontSize: 12, fontWeight: 600 }}>Undo</button></div>)}
     </div>
   );
 }
