@@ -2045,7 +2045,7 @@ export default function App() {
           <div className="relative w-full max-w-[460px] rounded-t-[16px] p-6 sm:rounded-[16px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
             <div className="flex h-[44px] w-[44px] items-center justify-center rounded-full" style={{ background: "var(--tint)" }}><Trash2 size={19} style={{ color: "#DB200D" }} /></div>
             <h2 className="mt-4 text-[22px] font-semibold">Archive {deleteTarget.value.name}? You can undo for 5 seconds.</h2>
-            <p className="mt-2 leading-relaxed" style={{ color: "var(--muted)" }}>This archives the contact. Tap Undo in the bar below within 5 seconds to bring it back. Purged after 30 days in Settings > Account.</p>
+            <p className="mt-2 leading-relaxed" style={{ color: "var(--muted)" }}>This archives the contact. Tap Undo in the bar below within 5 seconds to bring it back. Purged after 30 days in Settings &gt; Account.</p>
             <div className="mt-6 flex gap-2"><button onClick={() => setDeleteTarget(null)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button onClick={confirmDelete} disabled={busy} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{busy ? "Deleting…" : "Delete"}</button></div>
           </div>
         </div>
