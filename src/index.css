@@ -1,47 +1,39 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
-/* ==========================================================================
-   DESIGN SYSTEM TOKENS
-   Spacing Scale: 4, 8, 16, 24, 32, 48px
-   Typography (3 sizes max):
-     - Title: 20px / 24px, 600, -0.02em
-     - Body:  14px / 20px, 400 (500 active)
-     - Micro: 11px / 16px, 600, 0.08em uppercase
-   Accent Rule: --brand restricted to active row 2px left bar + 1 primary CTA
-   ========================================================================== */
+/* EXECUTED BLUEPRINT - Visual System
+   Type: Display 28/32 600, Title 20/24 600, Body 15/22 400, Caption 12/16 500, Small Caps 11/14 600 tracking 0.14em
+   Spacing: 4, 8, 12, 16, 24, 32, 48 - no arbitrary values
+   Color: Brand only for primary CTA + active dot + 1 accent per screen, max 10% of pixels. Never for body text.
+   Density: List = density (56px rows). Details = breathing room (24px gaps, 1.8 line-height). Never mix.
+*/
 :root {
-  --bg: #FAF9F7;
+  --bg: #FFFFFF;
+  --bg-soft: #FAF9F7;
   --surface: #FFFFFF;
-  --tint: #EDE9E4;
-  --divider: #E8E3DE;
+  --surface-2: #FAF9F7;
   --text: #0D0D0C;
   --muted: #6B6660;
+  --divider: #E8E3DE;
   --brand: #DB200D;
-  --success: #1A9A4A;
-  --danger: #DB200D;
-  --elevation-1: 0 8px 24px rgba(13, 13, 12, 0.08);
+  --tint: #EDE9E4;
+  --input: #FFFFFF;
+  --shadow: 0 18px 50px rgba(13, 13, 12, 0.12);
   --focus: #DB200D;
-
-  --font-title-size: 20px;
-  --font-title-lh: 24px;
-  --font-body-size: 14px;
-  --font-body-lh: 20px;
-  --font-micro-size: 11px;
-  --font-micro-lh: 16px;
 }
 
 [data-theme="dark"] {
   --bg: #0D0D0C;
+  --bg-soft: #161614;
   --surface: #161614;
-  --tint: #1E1E1B;
-  --divider: #2A2A27;
+  --surface-2: #1B1B19;
   --text: #F0EBE7;
   --muted: #A8A29E;
+  --divider: #2A2A27;
   --brand: #FF4A38;
-  --success: #1A9A4A;
-  --danger: #FF4A38;
-  --elevation-1: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --tint: #1E1E1B;
+  --input: #1B1B19;
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
   --focus: #FF4A38;
 }
 
@@ -50,13 +42,14 @@
 }
 
 html, body, #root {
-  height: 100%;
+  min-height: 100%;
+}
+
+body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  font-size: var(--font-body-size);
-  line-height: var(--font-body-lh);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -76,159 +69,120 @@ textarea:focus-visible,
 select:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--focus) !important;
-  outline-offset: -1px;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 18%, transparent) !important;
+  border-color: var(--focus);
 }
 
-/* Typography classes (3 sizes max) */
-.type-title {
-  font-size: var(--font-title-size);
-  line-height: var(--font-title-lh);
-  font-weight: 600;
-  letter-spacing: -0.02em;
+/* Seamless inline-editable fields in Details pane: look like clean typography at rest */
+.inline-field {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
-.type-body {
-  font-size: var(--font-body-size);
-  line-height: var(--font-body-lh);
-  font-weight: 400;
+.inline-field:hover {
+  background: color-mix(in srgb, var(--tint) 55%, transparent);
 }
 
-.type-body-medium {
-  font-size: var(--font-body-size);
-  line-height: var(--font-body-lh);
-  font-weight: 500;
+.inline-field:focus,
+.inline-field:focus-visible {
+  background: var(--input);
+  border-color: var(--divider);
+  outline: none !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent) !important;
 }
 
-.small-caps, .type-micro {
-  font-size: var(--font-micro-size);
-  line-height: var(--font-micro-lh);
-  font-weight: 600;
-  letter-spacing: 0.08em;
+input, textarea, select {
+  border-color: var(--divider);
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--focus);
+}
+
+.small-caps {
+  font-size: 11px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
+  font-weight: 600;
+  line-height: 14px;
 }
 
-/* Layout & Scrollbars */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 .no-scrollbar {
   scrollbar-width: none;
 }
+
 .thin-scroll::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 5px;
 }
 .thin-scroll::-webkit-scrollbar-thumb {
   background: var(--divider);
   border-radius: 99px;
 }
 
-/* Strict 48px Single-Line List Row */
-.contact-row {
-  height: 48px;
-  padding: 0 16px;
-  display: grid;
-  grid-template-columns: minmax(180px, 1.5fr) minmax(200px, 2fr) 110px 80px;
-  align-items: center;
-  gap: 16px;
-  border-bottom: 1px solid var(--divider);
-  position: relative;
-  cursor: pointer;
-  user-select: none;
-  transition: background-color 80ms cubic-bezier(0.2, 0, 0, 1);
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
-
-.contact-row:hover {
-  background-color: color-mix(in srgb, var(--tint) 60%, transparent);
-}
-
-.contact-row[data-selected="true"] {
-  background-color: var(--tint);
-}
-
-.contact-row[data-selected="true"]::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background-color: var(--brand);
-}
-
-@media (max-width: 767px) {
-  .contact-row {
-    grid-template-columns: 1fr auto;
-    gap: 8px;
-  }
-}
-
-/* Micro-interactions */
-.btn-press {
-  transition: transform 80ms cubic-bezier(0.2, 0, 0, 1), background-color 80ms cubic-bezier(0.2, 0, 0, 1), opacity 80ms ease;
-}
-.btn-press:active:not(:disabled) {
-  transform: scale(0.98);
-}
-.btn-press:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-@keyframes pulseDot {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 1; }
-}
-.saving-dot {
-  animation: pulseDot 120ms ease-in-out infinite alternate;
-}
-
-@keyframes popCheck {
-  0% { transform: scale(0.5); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
-}
-.animate-success {
-  animation: popCheck 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+.animate-fade {
+  animation: fadeUp 0.22s ease both;
 }
 
 @keyframes toastIn {
-  from { opacity: 0; transform: translate(-50%, 8px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(8px) translateX(-50%); }
+  to { opacity: 1; transform: translateY(0) translateX(-50%); }
 }
 .toast-in {
-  animation: toastIn 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: toastIn 0.2s ease both;
 }
 
-@keyframes shakeError {
+@keyframes contentSwap {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-swap {
+  animation: contentSwap 0.22s ease-out both;
+}
+
+@keyframes shake {
   0%, 100% { transform: translateX(0); }
-  20% { transform: translateX(-4px); }
-  40% { transform: translateX(4px); }
-  60% { transform: translateX(-2px); }
-  80% { transform: translateX(2px); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
 }
 .animate-shake {
-  animation: shakeError 160ms ease-in-out;
-  border-color: var(--danger) !important;
+  animation: shake 0.16s ease 2;
+  border-color: #DB200D !important;
 }
 
-@keyframes skeletonPulse {
-  0%, 100% { opacity: 0.45; }
-  50% { opacity: 0.9; }
+.btn-press {
+  transition: transform 80ms ease, opacity 80ms ease;
 }
+.btn-press:active {
+  transform: scale(0.97);
+}
+.btn-press:disabled {
+  transform: none;
+}
+
 .skeleton {
   background: var(--divider);
-  border-radius: 4px;
+  border-radius: 8px;
   animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .contact-row,
-  .btn-press,
-  .saving-dot,
-  .animate-success,
-  .toast-in,
-  .animate-shake,
-  .skeleton {
+  .animate-fade, .toast-in, .animate-swap, .btn-press {
     animation: none !important;
     transition: none !important;
   }
