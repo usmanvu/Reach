@@ -1,218 +1,76 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
+/* EXECUTED BLUEPRINT - Visual System
+   Type: Display 28/32 600, Title 20/24 600, Body 15/22 400, Caption 12/16 500, Small Caps 11/14 600 tracking 0.14em
+   Spacing: 4, 8, 12, 16, 24, 32, 48 - no arbitrary values
+   Color: Brand only for primary CTA + active dot + 1 accent per screen, max 10% of pixels. Never for body text.
+   Density: List = density (56px rows). Details = breathing room (24px gaps, 1.8 line-height). Never mix.
+*/
 :root {
-  /* Soft Stone Canvas + Pure White Bento Surfaces */
-  --bg: #F3F4F6;
+  --bg: #FFFFFF;
+  --bg-soft: #FAF9F7;
   --surface: #FFFFFF;
-  --surface-2: #F8F9FA;
-  --pill-track: #EAECEF;
-  --tint: #F3F4F6;
-  --divider: #E5E7EB;
-  --input: #F8F9FA;
-
-  /* Ink & Semantic Colors */
-  --text: #141413;
-  --muted: #6B7280;
-  --brand: #F04E23;
-  --brand-hover: #D93D14;
-  --brand-gradient: linear-gradient(135deg, #FF7038 0%, #F04E23 55%, #D6360E 100%);
-  --success: #16A34A;
-  --danger: #DC2626;
-  --focus: #F04E23;
-
-  /* Dark Obsidian Focal Surface (Contact Dossier & Cadence Card) */
-  --obsidian: #141413;
-  --obsidian-row: #222220;
-  --obsidian-border: #30302D;
-  --obsidian-text: #F9FAFB;
-  --obsidian-muted: #9CA3AF;
-
-  /* Elevation */
-  --shadow-card: 0 2px 10px rgba(20, 20, 19, 0.03), 0 1px 2px rgba(20, 20, 19, 0.04);
-  --shadow-float: 0 20px 50px rgba(20, 20, 19, 0.16);
+  --surface-2: #FAF9F7;
+  --text: #0D0D0C;
+  --muted: #6B6660;
+  --divider: #E8E3DE;
+  --brand: #DB200D;
+  --tint: #EDE9E4;
+  --input: #FFFFFF;
+  --shadow: 0 18px 50px rgba(13,13,12,.12);
+  --focus: #DB200D;
 }
-
 [data-theme="dark"] {
-  --bg: #0B0B0A;
-  --surface: #141413;
-  --surface-2: #1C1C1A;
-  --pill-track: #1F1F1D;
-  --tint: #222220;
+  --bg: #0D0D0C;
+  --bg-soft: #161614;
+  --surface: #161614;
+  --surface-2: #1B1B19;
+  --text: #F0EBE7;
+  --muted: #A8A29E;
   --divider: #2A2A27;
-  --input: #1C1C1A;
-
-  --text: #F5F4F0;
-  --muted: #9CA3AF;
-  --brand: #FF5A2C;
-  --brand-hover: #FF7147;
-  --brand-gradient: linear-gradient(135deg, #FF7038 0%, #E8461B 100%);
-  --success: #22C55E;
-  --danger: #EF4444;
-  --focus: #FF5A2C;
-
-  --obsidian: #181816;
-  --obsidian-row: #232320;
-  --obsidian-border: #33332F;
-  --obsidian-text: #F5F4F0;
-  --obsidian-muted: #9CA3AF;
-
-  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
-  --shadow-float: 0 20px 50px rgba(0, 0, 0, 0.55);
+  --brand: #FF4A38;
+  --tint: #1E1E1B;
+  --input: #1B1B19;
+  --shadow: 0 18px 50px rgba(0,0,0,.45);
+  --focus: #FF4A38;
 }
-
-* {
-  box-sizing: border-box;
-}
-
-html, body, #root {
-  min-height: 100%;
-}
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 14px;
-  line-height: 20px;
-  -webkit-font-smoothing: antialiased;
-}
-
-button, input, textarea, select {
-  font: inherit;
-  color: inherit;
-}
-
-button, a, input, textarea, select, [tabindex] {
-  outline: none;
-}
-
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible,
-[tabindex]:focus-visible {
+* { box-sizing: border-box; }
+html, body, #root { min-height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, input, textarea, select { font: inherit; }
+/* FIX: Never remove focus. Visible focus is non-negotiable. */
+button, a, input, textarea, select, [tabindex] { outline: none; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--focus) !important;
   outline-offset: 2px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 18%, transparent) !important;
+  border-color: var(--focus);
 }
-
-.bento-card {
-  background: var(--surface);
-  border-radius: 20px;
-  box-shadow: var(--shadow-card);
-}
-
-.obsidian-card {
-  background: var(--obsidian);
-  color: var(--obsidian-text);
-  border-radius: 24px;
-  box-shadow: var(--shadow-float);
-}
-
-.obsidian-well {
-  background: var(--obsidian-row);
-  border: 1px solid var(--obsidian-border);
-  border-radius: 16px;
-}
-
-/* Seamless click-to-edit inputs inside the Obsidian Dossier */
-.obsidian-inline {
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 3px 6px;
-  margin: -3px -6px;
-  color: var(--obsidian-text);
-  transition: background-color 100ms ease, border-color 100ms ease;
-}
-
-.obsidian-inline:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.obsidian-inline:focus,
-.obsidian-inline:focus-visible {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: var(--brand);
-  outline: none !important;
-}
-
-.small-caps {
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  font-weight: 600;
-  line-height: 14px;
-}
-
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
-}
-
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  scrollbar-width: none;
-}
-
-.thin-scroll::-webkit-scrollbar {
-  width: 5px;
-}
-.thin-scroll::-webkit-scrollbar-thumb {
-  background: rgba(156, 163, 175, 0.35);
-  border-radius: 99px;
-}
-
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.animate-fade {
-  animation: fadeUp 0.2s ease both;
-}
-
-@keyframes toastIn {
-  from { opacity: 0; transform: translateY(8px) translateX(-50%); }
-  to { opacity: 1; transform: translateY(0) translateX(-50%); }
-}
-.toast-in {
-  animation: toastIn 0.2s ease both;
-}
-
-@keyframes contentSwap {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-.animate-swap {
-  animation: contentSwap 0.18s ease-out both;
-}
-
-.btn-press {
-  transition: transform 80ms ease, opacity 80ms ease, background-color 100ms ease;
-}
-.btn-press:active:not(:disabled) {
-  transform: scale(0.97);
-}
-.btn-press:disabled {
-  opacity: 0.45;
-}
-
-.skeleton {
-  background: var(--divider);
-  border-radius: 8px;
-  animation: skeletonPulse 1.2s ease-in-out infinite;
-}
-@keyframes skeletonPulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 0.95; }
-}
-
+input, textarea, select { border-color: var(--divider); }
+input:focus, textarea:focus, select:focus { border-color: var(--focus); }
+.small-caps { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; line-height: 14px; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+.thin-scroll::-webkit-scrollbar { width: 5px; }
+.thin-scroll::-webkit-scrollbar-thumb { background: var(--divider); border-radius: 99px; }
+.line-clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+/* Micro-interactions: Button press 80ms scale 0.97, Success 220ms fade, Loading skeleton, Error 160ms shake */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fade { animation: fadeUp .22s ease both; }
+@keyframes toastIn { from { opacity: 0; transform: translateY(8px) translateX(-50%); } to { opacity: 1; transform: translateY(0) translateX(-50%); } }
+.toast-in { animation: toastIn .2s ease both; }
+@keyframes drawerIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.animate-drawer { animation: drawerIn .22s ease-out both; }
+@keyframes contentSwap { from { opacity: 0; } to { opacity: 1; } }
+.animate-swap { animation: contentSwap .22s ease-out both; }
+@keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+.animate-shake { animation: shake .16s ease 2; border-color: #DB200D !important; }
+.btn-press { transition: transform 80ms ease, opacity 80ms ease; }
+.btn-press:active { transform: scale(0.97); }
+.btn-press:disabled { transform: none; }
+.skeleton { background: var(--divider); border-radius: 8px; animation: skeletonPulse 1.2s ease-in-out infinite; }
+@keyframes skeletonPulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .animate-fade, .toast-in, .animate-swap, .btn-press, .skeleton {
-    animation: none !important;
-    transition: none !important;
-  }
+  .animate-fade, .toast-in, .animate-drawer, .animate-swap, .btn-press { animation: none !important; transition: none !important; }
 }
