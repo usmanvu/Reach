@@ -4,7 +4,7 @@ import { Search, Plus, Download, Pencil, Trash2, X, Minus, ExternalLink, Copy, C
 
 type Stage = "to-reach" | "pitched" | "in-conversation" | "follow-up" | "won" | "paused" | "archived";
 type WorkType = "branding" | "editorial" | "social" | "collaboration" | "other" | "";
-type ContactValue = { name: string; channel: string; outreachDate: string; contactDetails: string; link: string; replied: boolean; followedUp: boolean; notes: string; createdAt: string; updatedAt: string; stage?: Stage; whyThem?: string; whatSent?: string; nextStep?: string; workType?: WorkType; followUpDate?: string; featuredLink?: string; testimonial?: string; referredById?: string; deletedAt?: string; winNote?: string; };
+type ContactValue = { name: string; channel: string; outreachDate: string; contactDetails: string; link: string; replied: boolean; followedUp: boolean; notes: string; createdAt: string; updatedAt: string; stage?: Stage; whyThem?: string; whatSent?: string; nextStep?: string; workType?: WorkType; followUpDate?: string; featuredLink?: string; };
 type Contact = { id: string; value: ContactValue };
 type ThemeMode = "system" | "light" | "dark";
 type Filter = "all" | "to-reach" | "replied" | "followed" | "today" | "needs-follow-up";
@@ -41,58 +41,20 @@ function stageFromLegacy(replied: boolean, followedUp: boolean): Stage {
   if (followedUp) return "follow-up";
   return "to-reach";
 }
-// DEPRECATED: Stage no longer overwrites history. Paused / Archived preserve replied / followedUp.
-// Kept only for legacy migration of contacts created before decoupling.
 function flagsFromStage(stage: Stage): { replied: boolean; followedUp: boolean } {
-  if (stage === "in-conversation" || stage === "follow-up" || stage === "won") return { replied: true, followedUp: stage === "follow-up" };
+  if (stage === "in-conversation" || stage === "follow-up" || stage === "won") return { replied: true, followedUp: stage === "follow-up" || stage === "won" };
+  if (stage === "pitched") return { replied: false, followedUp: false };
+  if (stage === "paused" || stage === "archived") return { replied: false, followedUp: false };
   return { replied: false, followedUp: false };
-}
-function daysSinceISO(d: string, today: string): number { if (!d) return -1; const then = new Date(`${d}T12:00:00`).getTime(); const now = new Date(`${today}T12:00:00`).getTime(); return Math.floor((now - then) / 86400000); }
-// SINGLE SOURCE OF TRUTH for follow-up. Used by counts, filtered list, and Next Best Action. Do not duplicate this logic.
-function isFollowUpDue(c: ContactValue, today: string): boolean {
-  const s = c.stage || stageFromLegacy(c.replied, c.followedUp);
-  if (s === "won" || s === "archived" || s === "paused") return false;
-  if (c.deletedAt) return false;
-  if (c.followUpDate && c.followUpDate <= today) return true;
-  if (s === "follow-up") return true;
-  if (!c.followUpDate && !c.replied && daysSinceISO(c.outreachDate, today) >= 4) return true;
-  return false;
-}
-function safeHref(raw: string): string {
-  const v = (raw || "").trim();
-  if (!v) return "";
-  if (v.toLowerCase().startsWith("javascript:") || v.toLowerCase().startsWith("data:")) return "";
-  if (/^https?:\/\//i.test(v)) return v;
-  if (/^mailto:/i.test(v)) return v;
-  if (isEmailValue(v)) return `mailto:${v}`;
-  if (v.includes(".") && !v.includes(" ")) return `https://${v.replace(/^@+/, "")}`;
-  return "";
-}
-function parsePasteToContact(raw: string): { name: string; channel: string; link: string; contactDetails: string } {
-  const input = (raw || "").trim();
-  if (!input) return { name: "", channel: "", link: "", contactDetails: "" };
-  // URL
-  const urlMatch = input.match(/(https?:\/\/[^\s,]+|www\.[^\s,]+|[a-z0-9-]+\.[a-z]{2,}\/[^\s,]*)/i);
-  if (urlMatch) {
-    const link = normalizeLink(urlMatch[0], "", input);
-    const kind = channelKind(link);
-    const handle = link.replace(/^https?:\/\//, "").split("/").filter(Boolean).pop() || "";
-    return { name: handle.replace(/^@/, "").replace(/[-_]/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase()), channel: kind === "unknown" ? "Website" : kind.charAt(0).toUpperCase() + kind.slice(1), link, contactDetails: input };
-  }
-  if (isEmailValue(input)) return { name: input.split("@")[0].replace(/[.\-_]/g, " "), channel: "Email", link: `mailto:${input}`, contactDetails: input };
-  const handle = input.replace(/^@+/, "").replace(/\s+/g, "");
-  if (handle && !handle.includes(" ")) {
-    return { name: handle.replace(/[-_]/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase()), channel: "Instagram", link: `https://instagram.com/${handle}`, contactDetails: input };
-  }
-  return { name: input, channel: "", link: "", contactDetails: input };
 }
 function normalizeContactValue(v: any): ContactValue {
   const replied = !!v?.replied;
   const followedUp = !!v?.followedUp;
   const stage: Stage = (typeof v?.stage === "string" && STAGES.some(s => s.value === v.stage)) ? v.stage : stageFromLegacy(replied, followedUp);
-  // DECOUPLED: Stage never overwrites history. Paused / Archived preserve replied / followedUp.
-  const finalReplied = replied;
-  const finalFollowed = followedUp;
+  const flags = flagsFromStage(stage);
+  // Keep legacy booleans in sync with stage, but respect explicit stage if present
+  const finalReplied = v?.stage ? flags.replied : replied;
+  const finalFollowed = v?.stage ? flags.followedUp : followedUp;
   return {
     name: typeof v?.name === "string" ? v.name : "",
     channel: typeof v?.channel === "string" ? v.channel : "",
@@ -111,10 +73,6 @@ function normalizeContactValue(v: any): ContactValue {
     workType: (typeof v?.workType === "string" && WORK_TYPES.some(w => w.value === v.workType)) ? v.workType : "",
     followUpDate: typeof v?.followUpDate === "string" ? v.followUpDate : "",
     featuredLink: typeof v?.featuredLink === "string" ? v.featuredLink : "",
-    testimonial: typeof v?.testimonial === "string" ? v.testimonial : "",
-    referredById: typeof v?.referredById === "string" ? v.referredById : "",
-    deletedAt: typeof v?.deletedAt === "string" ? v.deletedAt : "",
-    winNote: typeof v?.winNote === "string" ? v.winNote : "",
   };
 }
 function normalizeProfileValue(raw: any, fallbackName = ""): ProfileValue {
@@ -523,15 +481,6 @@ export default function App() {
   const [modal, setModal] = useState<ModalState>(null);
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  // EXECUTED BLUEPRINT: Paste-to-Contact, Today's 3, Win Loop, Undo Delete
-  const [pasteText, setPasteText] = useState("");
-  const [winModal, setWinModal] = useState(false);
-  const [winContact, setWinContact] = useState<Contact | null>(null);
-  const [winNote, setWinNote] = useState("");
-  const [winReferral, setWinReferral] = useState("");
-  const [pendingDelete, setPendingDelete] = useState<{ contact: Contact; timer: number } | null>(null);
-  const [todayDone, setTodayDone] = useState<string[]>([]);
-  const [streak, setStreak] = useState(0);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [notesDraft, setNotesDraft] = useState("");
@@ -849,10 +798,9 @@ export default function App() {
       if (filter === "replied" && !["in-conversation", "won"].includes(stage)) return false;
       if (filter === "followed" && stage !== "follow-up") return false;
       if (filter === "today" && c.value.followUpDate !== today && c.value.outreachDate !== today) return false;
-      if (filter === "needs-follow-up" && !isFollowUpDue(c.value, today)) return false;
+      if (filter === "needs-follow-up" && !(stage === "follow-up" || (!c.value.replied && daysSince(c.value.outreachDate) >= 4))) return false;
       if (!q) return true;
-      // Search now includes Notes + Follow-up Date. If match is in Notes, row shows "In notes" chip.
-      return [c.value.name, c.value.channel, c.value.contactDetails, c.value.link, c.value.whyThem, c.value.whatSent, c.value.nextStep, c.value.workType, c.value.notes, c.value.followUpDate].some(v => (v || "").toLowerCase().includes(q));
+      return [c.value.name, c.value.channel, c.value.contactDetails, c.value.link, c.value.whyThem, c.value.whatSent, c.value.nextStep, c.value.workType].some(v => (v || "").toLowerCase().includes(q));
     });
     return [...list].sort((a, b) => {
       if (filter === "needs-follow-up") {
@@ -869,7 +817,7 @@ export default function App() {
   const counts = useMemo(() => {
     const today = todayISO();
     const daysSince = (d: string) => { if (!d) return -1; const then = new Date(`${d}T12:00:00`).getTime(); const now = new Date(`${today}T12:00:00`).getTime(); return Math.floor((now - then) / 86400000); };
-    const followUpDue = contacts.filter(c => isFollowUpDue(c.value, today));
+    const followUpDue = contacts.filter(c => { const s = c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp); if (s === "follow-up") return true; if (c.value.followUpDate && c.value.followUpDate <= today && s !== "won" && s !== "archived") return true; return !c.value.replied && daysSince(c.value.outreachDate) >= 4; });
     return { total: contacts.length, replied: contacts.filter(c => c.value.replied).length, followed: contacts.filter(c => c.value.followedUp).length, toReach: contacts.filter(c => (c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp)) === "to-reach").length, outreachToday: contacts.filter(c => c.value.outreachDate === today || c.value.followUpDate === today).length, needsFollowUp: followUpDue.length, inConversation: contacts.filter(c => (c.value.stage || stageFromLegacy(c.value.replied, c.value.followedUp)) === "in-conversation").length, followUpDueList: followUpDue };
   }, [contacts]);
 
@@ -884,12 +832,10 @@ export default function App() {
     showToast(`Exported ${contacts.length} ${contacts.length === 1 ? "contact" : "contacts"}`);
   };
 
-  const copyText = async (text: string, key: string) => {
-    try {
-      if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); }
-      else { const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
-      setCopied(key); setTimeout(() => setCopied(null), 2000); showToast("Copied to clipboard");
-    } catch { showToast("Select the text to copy it"); }
+  const copyText = (text: string, key: string) => {
+    const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); setCopied(key); setTimeout(() => setCopied(null), 2000); showToast("Copied to clipboard"); } catch { showToast("Select the text to copy it"); }
+    ta.remove();
   };
 
   const toggleStatus = async (field: "replied" | "followedUp") => {
@@ -897,25 +843,18 @@ export default function App() {
     try {
       const nextVal = !selected.value[field];
       const curStage = selected.value.stage || stageFromLegacy(selected.value.replied, selected.value.followedUp);
-      // DECOUPLED: toggling a boolean never erases the other boolean or resets stage to To-Reach.
       let nextStage = curStage;
-      if (field === "replied" && nextVal && (curStage === "to-reach" || curStage === "pitched")) nextStage = "in-conversation";
-      if (field === "followedUp" && nextVal && curStage !== "follow-up") nextStage = "follow-up";
-      await persistContact(selected, { [field]: nextVal, stage: nextStage });
+      if (field === "replied") nextStage = nextVal ? (curStage === "to-reach" || curStage === "pitched" ? "in-conversation" : curStage) : "to-reach";
+      if (field === "followedUp") nextStage = nextVal ? "follow-up" : (selected.value.replied ? "in-conversation" : "pitched");
+      const flags = flagsFromStage(nextStage);
+      await persistContact(selected, { [field]: nextVal, stage: nextStage, replied: field === "replied" ? nextVal : flags.replied, followedUp: field === "followedUp" ? nextVal : flags.followedUp });
     }
     catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t update status"); }
   };
   const setStage = async (stage: Stage) => {
     if (!selected) return;
-    // DECOUPLED: Paused / Archived preserve replied / followedUp. Only forward transitions set booleans.
-    const patch: Partial<ContactValue> = { stage };
-    if (stage === "in-conversation" && !selected.value.replied) patch.replied = true;
-    if (stage === "won" && !selected.value.replied) patch.replied = true;
-    if (stage === "follow-up" && !selected.value.followedUp) patch.followedUp = true;
-    try {
-      await persistContact(selected, patch); showToast(`Moved to ${stageLabel(stage)}`);
-      if (stage === "won") { setWinContact(selected); setWinNote(""); setWinReferral(""); setWinModal(true); }
-    }
+    const flags = flagsFromStage(stage);
+    try { await persistContact(selected, { stage, replied: flags.replied, followedUp: flags.followedUp }); showToast(`Moved to ${stageLabel(stage)}`); }
     catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t update stage"); }
   };
 
@@ -953,14 +892,13 @@ export default function App() {
     try {
       if (modal?.mode === "edit") {
         const c = modal.contact;
-        // Preserve history on Paused / Archived. Only forward stages set booleans.
-        const preservedReplied = (form.stage === "paused" || form.stage === "archived") ? c.value.replied : (form.stage === "in-conversation" || form.stage === "won" ? true : c.value.replied);
-        const preservedFollowed = (form.stage === "paused" || form.stage === "archived") ? c.value.followedUp : (form.stage === "follow-up" ? true : c.value.followedUp);
-        await persistContact(c, { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: preservedReplied, followedUp: preservedFollowed, notes: form.notes, stage: form.stage, whyThem: form.whyThem.trim(), whatSent: form.whatSent.trim(), nextStep: form.nextStep.trim(), workType: form.workType, followUpDate: form.followUpDate, featuredLink: form.featuredLink.trim() });
+        const flags = flagsFromStage(form.stage);
+        await persistContact(c, { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: flags.replied, followedUp: flags.followedUp, notes: form.notes, stage: form.stage, whyThem: form.whyThem.trim(), whatSent: form.whatSent.trim(), nextStep: form.nextStep.trim(), workType: form.workType, followUpDate: form.followUpDate, featuredLink: form.featuredLink.trim() });
         if (selectedId === c.id) setNotesDraft(form.notes);
         showToast("Contact updated"); selectContact(c.id);
       } else {
-        const value: ContactValue = { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: form.stage === "in-conversation" || form.stage === "won", followedUp: form.stage === "follow-up", notes: form.notes, createdAt: now, updatedAt: now, stage: form.stage, whyThem: form.whyThem.trim(), whatSent: form.whatSent.trim(), nextStep: form.nextStep.trim(), workType: form.workType, followUpDate: form.followUpDate, featuredLink: form.featuredLink.trim() };
+        const flags = flagsFromStage(form.stage);
+        const value: ContactValue = { name: form.name.trim(), channel: form.channel.trim(), outreachDate: form.outreachDate, contactDetails: form.contactDetails.trim(), link: normalized, replied: flags.replied, followedUp: flags.followedUp, notes: form.notes, createdAt: now, updatedAt: now, stage: form.stage, whyThem: form.whyThem.trim(), whatSent: form.whatSent.trim(), nextStep: form.nextStep.trim(), workType: form.workType, followUpDate: form.followUpDate, featuredLink: form.featuredLink.trim() };
         const created = await api("records.create", { collection: "outreach-contacts", value, idempotency_key: `contact-${uid()}` }) as { id: string };
         await reloadContacts(); setModal(null); showToast("Contact added");
         if (pendingClearScratchpad) { setScratchpad(""); scratchpadRef.current = ""; setScratchpadSavedAt(null); setClearConfirm(false); setPendingClearScratchpad(false); saveSettings(themeMode, selectedId); }
@@ -972,59 +910,14 @@ export default function App() {
   };
   const confirmDelete = async () => {
     if (!deleteTarget) return; setBusy(true);
-    const target = deleteTarget; setDeleteTarget(null); setBusy(false);
-    // SOFT DELETE + UNDO: remove from UI now, purge in 5s unless Undo is tapped.
-    setContacts(prev => prev.filter(c => c.id !== target.id));
-    if (selectedId === target.id) { setSelectedId(null); setPanelOpen(false); saveSettings(themeMode, null); }
-    const timer = window.setTimeout(async () => {
-      try { await api("records.delete", { collection: "outreach-contacts", id: target.id }); } catch { /* already gone */ }
-      setPendingDelete(cur => cur?.contact.id === target.id ? null : cur);
-    }, 5000);
-    setPendingDelete({ contact: target, timer });
-    showToast(`Archived ${target.value.name}.`);
-  };
-  const undoDelete = () => {
-    if (!pendingDelete) return;
-    window.clearTimeout(pendingDelete.timer);
-    setContacts(prev => [...prev, pendingDelete.contact].sort((a,b) => b.value.updatedAt.localeCompare(a.value.updatedAt)));
-    setPendingDelete(null); showToast("Restored.");
-  };
-  const saveWinLoop = async () => {
-    if (!winContact) return;
     try {
-      const patch: Partial<ContactValue> = { winNote: winNote.trim(), testimonial: winNote.trim() };
-      await persistContact(winContact, patch);
-      if (winReferral.trim()) {
-        const parsed = parsePasteToContact(winReferral.trim());
-        const value: ContactValue = { name: parsed.name || winReferral.trim(), channel: parsed.channel || "Instagram", outreachDate: todayISO(), contactDetails: winReferral.trim(), link: parsed.link, replied: false, followedUp: false, notes: `Referred by ${winContact.value.name}.`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), stage: "to-reach", whyThem: "", whatSent: "", nextStep: `Intro via ${winContact.value.name}`, workType: winContact.value.workType || "", followUpDate: "", featuredLink: "", referredById: winContact.id };
-        const created = await api("records.create", { collection: "outreach-contacts", value, idempotency_key: `contact-${uid()}` }) as { id: string };
-        await reloadContacts(); showToast(`Win saved. ${parsed.name || "Referral"} added to To-Reach.`);
-        selectContact(created.id);
-      } else { showToast("Win saved."); }
-    } catch (e) { showToast(e instanceof Error ? e.message : "Could not save win"); }
-    setWinModal(false); setWinContact(null);
+      await api("records.delete", { collection: "outreach-contacts", id: deleteTarget.id });
+      setContacts(prev => prev.filter(c => c.id !== deleteTarget.id));
+      if (selectedId === deleteTarget.id) { setSelectedId(null); setPanelOpen(false); saveSettings(themeMode, null); }
+      showToast("Contact deleted"); setDeleteTarget(null);
+    } catch (e) { showToast(e instanceof Error ? e.message : "Couldn’t delete contact"); }
+    finally { setBusy(false); }
   };
-  const handlePasteAdd = async () => {
-    const raw = pasteText.trim(); if (!raw) return;
-    const parsed = parsePasteToContact(raw);
-    // Duplicate check by normalized link + name
-    const dup = contacts.find(c => (parsed.link && displayLink(c) === parsed.link) || (parsed.name && c.value.name.toLowerCase() === parsed.name.toLowerCase()));
-    if (dup) { selectContact(dup.id); showToast("You already have this contact. Opened it instead."); setPasteText(""); return; }
-    const value: ContactValue = { name: parsed.name || raw, channel: parsed.channel, outreachDate: todayISO(), contactDetails: parsed.contactDetails, link: parsed.link, replied: false, followedUp: false, notes: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), stage: "to-reach", whyThem: "", whatSent: "", nextStep: "", workType: "", followUpDate: "", featuredLink: "" };
-    try { const created = await api("records.create", { collection: "outreach-contacts", value, idempotency_key: `contact-${uid()}` }) as { id: string }; await reloadContacts(); setPasteText(""); showToast("Added to To-Reach."); selectContact(created.id); } catch (e) { showToast(e instanceof Error ? e.message : "Could not add contact"); }
-  };
-  const todaysThree = (() => {
-    const today = todayISO();
-    const due = contacts.filter(c => isFollowUpDue(c.value, today) && !todayDone.includes(c.id));
-    const toReach = contacts.filter(c => (c.value.stage || "to-reach") === "to-reach" && !todayDone.includes(c.id));
-    const deepen = contacts.filter(c => (c.value.stage || "") === "in-conversation" && !todayDone.includes(c.id));
-    const list: { kind: string; contact: Contact }[] = [];
-    if (toReach[0]) list.push({ kind: "New", contact: toReach[0] });
-    if (due[0]) list.push({ kind: "Follow-up", contact: due[0] });
-    if (deepen[0]) list.push({ kind: "Deepen", contact: deepen[0] });
-    return list;
-  })();
-  const markTodayDone = (id: string) => { setTodayDone(prev => [...prev, id]); setStreak(s => s + 1); showToast("Done. Next up."); };
 
   const closePanel = () => { selectContact(null); };
 
@@ -1038,7 +931,7 @@ export default function App() {
   const saveProfile = async () => {
     const next: ProfileValue = { name: profileDraft.name.trim(), socials: normalizeSocials(profileDraft.socials.map(s => ({ ...s, platform: s.platform.trim(), value: s.value.trim() }))), avatarUrl: (profileDraft.avatarUrl || "").trim(), whatIDo: (profileDraft.whatIDo || "").trim(), openFor: (profileDraft.openFor || "").trim(), featuredLink: (profileDraft.featuredLink || "").trim() };
     setProfile(next); profileRef.current = next; setProfileDraft(next);
-    try { await saveSettings(themeMode, selectedId); showToast("Profile saved. Your links are live."); } catch { showToast("Could not save profile. Tap Save again."); }
+    try { await saveSettings(themeMode, selectedId); showToast("Profile saved"); } catch { showToast("Profile saved"); }
     setSettingsOpen(false);
   };
   // --- Avatar / PFP: Supabase Storage (bucket: avatars, public, per-user folder) ---
@@ -1049,7 +942,6 @@ export default function App() {
     setAvatarUploading(true);
     try {
       const rawExt = file.name.split(".").pop()?.toLowerCase() || "jpg";
-      if (rawExt === "svg") { showToast("SVG photos are blocked for safety. Use JPG, PNG or WebP."); return; }
       const ext = ["jpg", "jpeg", "png", "webp", "gif"].includes(rawExt) ? rawExt : "jpg";
       const path = `${user.id}/avatar.${ext}`;
       // Clean old avatar with different extension so only one file lives in the folder
@@ -1093,7 +985,7 @@ export default function App() {
   };
   const saveShortcuts = async () => {
     shortcutsRef.current = shortcuts;
-    try { await saveSettings(themeMode, selectedId); showToast("Shortcuts saved."); } catch { showToast("Could not save shortcuts. Try again."); }
+    try { await saveSettings(themeMode, selectedId); showToast("Shortcuts saved"); } catch { showToast("Shortcuts saved"); }
   };
   const resetShortcuts = async () => {
     const next: ShortcutMap = { ...DEFAULT_SHORTCUTS };
@@ -1210,7 +1102,7 @@ export default function App() {
 
   const todayLabel = new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
   const nextBest = (counts as any).followUpDueList?.[0] as Contact | undefined;
-  const focusLine = counts.needsFollowUp > 0 ? `Today: ${counts.needsFollowUp} to follow up, ${counts.toReach} to reach. Start with ${nextBest?.value.name || "the oldest thread"}.` : counts.outreachToday === 0 && counts.total > 0 ? "Today: Reach out to 1 new person." : counts.total === 0 ? "Paste a handle to create your first contact in 30 seconds." : "You are caught up. Deepen one thread.";
+  const focusLine = counts.needsFollowUp > 0 ? `Focus: Follow up with ${counts.needsFollowUp} ${counts.needsFollowUp === 1 ? "person" : "people"} today — start with ${nextBest?.value.name || "the oldest thread"}.` : counts.outreachToday === 0 && counts.total > 0 ? "Focus: Reach out to 1 new person today." : counts.total === 0 ? "Focus: Your first outreach will show here. Draft it below." : "Focus: You're caught up — pick one thread to deepen.";
   const todayDesk = { due: counts.needsFollowUp, waiting: (counts as any).inConversation || 0, todayCount: counts.outreachToday };
   const applyFocus = (kind: "today" | "needs-follow-up" | "replied") => { setFilter(kind); setActiveFocus(kind === "today" ? "Outreach today" : kind === "needs-follow-up" ? "Needs follow-up" : "Replied"); if (isMobile || isTablet) { setPanelOpen(false); setMinimized(false); } };
   const onScratchpadChange = (text: string) => {
@@ -1243,7 +1135,7 @@ export default function App() {
         <p className="mt-4 truncate text-left text-[15px] leading-relaxed" title={focusLine}>{focusLine}</p>
         {nextBest && (
           <button onClick={() => selectContact(nextBest.id)} className="mt-4 w-full rounded-[16px] border p-4 text-left" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-            <span className="small-caps block" style={{ color: "var(--muted)" }}>Do this next</span>
+            <span className="small-caps block" style={{ color: "var(--muted)" }}>Next best action</span>
             <span className="mt-2 block truncate text-[15px] font-semibold">{nextBest.value.name} — {stageLabel(nextBest.value.stage)}</span>
             <span className="mt-1 block truncate text-[13px]" style={{ color: "var(--muted)" }}>{nextBest.value.nextStep || nextBest.value.whyThem || "Open to see context and follow up"}</span>
             <span className="mt-2 block text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Open thread →</span>
@@ -1251,16 +1143,16 @@ export default function App() {
         )}
       </section>
 
-      <section aria-label="Capture in 5 seconds" className="mt-14">
-        <label htmlFor="scratchpad" className="small-caps" style={{ color: "var(--muted)" }}>Capture in 5 seconds</label>
+      <section aria-label="Quick note" className="mt-14">
+        <label htmlFor="scratchpad" className="small-caps" style={{ color: "var(--muted)" }}>Quick note</label>
         {quickNoteFocused ? (
-          <textarea id="scratchpad" autoFocus value={scratchpad} onChange={e => onScratchpadChange(e.target.value)} onBlur={() => { window.setTimeout(() => setQuickNoteFocused(false), 150); }} placeholder="Capture in 5 seconds to self..." rows={3} className="mt-4 w-full resize-y border-b bg-transparent pb-2 text-[15px] leading-relaxed outline-none" style={{ borderColor: "var(--divider)" }} />
+          <textarea id="scratchpad" autoFocus value={scratchpad} onChange={e => onScratchpadChange(e.target.value)} onBlur={() => { window.setTimeout(() => setQuickNoteFocused(false), 150); }} placeholder="Quick note to self..." rows={3} className="mt-4 w-full resize-y border-b bg-transparent pb-2 text-[15px] leading-relaxed outline-none" style={{ borderColor: "var(--divider)" }} />
         ) : (
-          <input id="scratchpad" value={scratchpad} onChange={e => onScratchpadChange(e.target.value)} onFocus={() => setQuickNoteFocused(true)} onClick={() => setQuickNoteFocused(true)} placeholder="Capture in 5 seconds to self..." className="mt-4 w-full border-b bg-transparent pb-2 text-[15px] leading-relaxed outline-none" style={{ borderColor: "var(--divider)" }} />
+          <input id="scratchpad" value={scratchpad} onChange={e => onScratchpadChange(e.target.value)} onFocus={() => setQuickNoteFocused(true)} onClick={() => setQuickNoteFocused(true)} placeholder="Quick note to self..." className="mt-4 w-full border-b bg-transparent pb-2 text-[15px] leading-relaxed outline-none" style={{ borderColor: "var(--divider)" }} />
         )}
         {quickNoteFocused && <p aria-live="polite" className="mt-2 text-xs" style={{ color: "var(--muted)" }}>{scratchpadSaving ? "Saving…" : scratchpadSavedAt ? `Saved • ${scratchpadSavedAt}` : `${scratchpad.length} characters`}</p>}
         <div className="mt-3 flex items-center gap-5">
-          <button onClick={() => openAdd(scratchpad, { clearScratchpadAfterSave: true })} disabled={!scratchpad.trim()} className="min-h-[32px] text-xs font-medium underline underline-offset-4 disabled:opacity-40" style={{ color: "var(--muted)" }}>Add to To-Reach</button>
+          <button onClick={() => openAdd(scratchpad, { clearScratchpadAfterSave: true })} disabled={!scratchpad.trim()} className="min-h-[32px] text-xs font-medium underline underline-offset-4 disabled:opacity-40" style={{ color: "var(--muted)" }}>Turn into contact</button>
           <button onClick={() => { if (!scratchpad.trim()) return; if (!clearConfirm) { setClearConfirm(true); return; } clearScratchpad(); }} disabled={!scratchpad.trim()} className="min-h-[32px] text-xs font-medium underline underline-offset-4 disabled:opacity-40" style={{ color: clearConfirm ? "#DB200D" : "var(--muted)" }}>{clearConfirm ? "Confirm clear" : "Clear"}</button>
         </div>
       </section>
@@ -1379,14 +1271,14 @@ export default function App() {
           <section className="mt-10 space-y-4">
             <p className="small-caps" style={{ color: "var(--muted)" }}>Context — why them</p>
             {selected.value.whyThem && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>Why them</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.whyThem}</p></div>}
-            {selected.value.whatSent && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>Pitch you sent</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.whatSent}</p></div>}
+            {selected.value.whatSent && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>What I sent</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.whatSent}</p></div>}
             {selected.value.nextStep && <div><p className="text-xs font-medium" style={{ color: "var(--muted)" }}>Next step</p><p className="mt-1 text-[15px] leading-relaxed">{selected.value.nextStep}</p></div>}
-            {selected.value.featuredLink && safeHref(selected.value.featuredLink) && <a href={safeHref(selected.value.featuredLink)} target="_blank" rel="noopener noreferrer" className="block truncate text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Featured work for them →</a>}
+            {selected.value.featuredLink && <a href={selected.value.featuredLink} target="_blank" rel="noopener noreferrer" className="block truncate text-sm font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>Featured work for them →</a>}
           </section>
         )}
         <section className="mt-12">
           <div className="flex items-baseline justify-between gap-3">
-            <label htmlFor="notes-editor" className="small-caps" style={{ color: "var(--muted)" }}>Notes {search.trim() && notesDraft.toLowerCase().includes(search.trim().toLowerCase()) ? "• In notes" : ""}</label>
+            <label htmlFor="notes-editor" className="small-caps" style={{ color: "var(--muted)" }}>Notes</label>
             {notesSavedAt && !notesSaving ? <span className="text-xs" style={{ color: "var(--muted)" }}>Saved • {notesSavedAt}</span> : <span />}
           </div>
           <textarea id="notes-editor" value={notesDraft} onChange={e => onNotesChange(e.target.value)} onBlur={() => saveNotesNow(notesDraft)} placeholder="Add context, what you sent, what they said, next step…" className="mt-2 w-full resize-y border-0 border-b bg-transparent px-0 py-3 text-[15px] leading-[1.8] outline-none" style={{ borderColor: "var(--divider)", minHeight: 180 }} />
@@ -1411,14 +1303,14 @@ export default function App() {
 
   // --- Auth screens ---
   if (authLoading) {
-    return (<div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center" }}><p style={{ color: "var(--muted)" }}>Loading your outreach...</p></div>);
+    return (<div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center" }}><p style={{ color: "var(--muted)" }}>Loading Reach…</p></div>);
   }
   if (!isSupabaseConfigured) {
     return (
       <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
         <div style={{ maxWidth: 520, width: "100%", textAlign: "center" }}>
           <p className="small-caps" style={{ color: "var(--muted)" }}>Reach • Setup needed</p>
-          <h1 className="mt-3 text-[32px] font-semibold">Connect your database to load contacts. Add keys in Vercel, then redeploy.</h1>
+          <h1 className="mt-3 text-[32px] font-semibold">Connect Supabase first</h1>
           <p className="mt-3 leading-relaxed" style={{ color: "var(--muted)" }}>Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel → Settings → Environment Variables, then redeploy. See SUPABASE-SETUP.txt in the files you downloaded.</p>
         </div>
       </div>
@@ -1614,27 +1506,6 @@ export default function App() {
             <p className="small-caps" style={{ color: "var(--muted)" }}>Your outreach</p>
             <h1 className="mt-2 text-[34px] font-semibold leading-[1.02] tracking-[-0.025em] sm:text-[clamp(30px,4vw,44px)]">Every conversation,<br /> held with care.</h1>
             <p className="mt-3 max-w-[560px] text-[15px] leading-relaxed" style={{ color: "var(--muted)" }}>Track who you reached out to, what was said, and what comes next — without losing the human thread.</p>
-            {/* EXECUTED: Paste-to-Contact - 1-field capture, 2 clicks to done */}
-            <form onSubmit={(e) => { e.preventDefault(); handlePasteAdd(); }} className="mt-5 flex max-w-[560px] gap-2">
-              <input value={pasteText} onChange={e => setPasteText(e.target.value)} placeholder="Paste handle, link, or name" aria-label="Paste handle, link, or name" className="h-[48px] flex-1 rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-              <button type="submit" disabled={!pasteText.trim()} className="btn-press min-h-[48px] shrink-0 rounded-[12px] px-4 text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--brand)" }}>Add to To-Reach</button>
-            </form>
-            {pasteText.trim() && (() => { const pv = parsePasteToContact(pasteText.trim()); return pv.name ? <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>Preview: {pv.name} • {pv.channel || "Add channel"} • {pv.link || "No link yet"}</p> : null; })()}
-            {/* EXECUTED: Today's 3 - 1 New, 1 Follow-up, 1 Deepen */}
-            {todaysThree.length > 0 && (
-              <div className="mt-5 max-w-[560px] rounded-[16px] border p-4" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
-                <div className="flex items-center justify-between"><p className="small-caps" style={{ color: "var(--muted)" }}>Do this next • Today&apos;s 3</p>{streak > 0 && <span className="text-xs font-medium" style={{ color: "var(--brand)" }}>{streak} done today</span>}</div>
-                <div className="mt-3 space-y-2">
-                  {todaysThree.map(item => (
-                    <div key={item.contact.id} className="flex items-center gap-3">
-                      <span className="shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium" style={{ borderColor: "var(--divider)", color: "var(--muted)" }}>{item.kind}</span>
-                      <button onClick={() => selectContact(item.contact.id)} className="min-w-0 flex-1 truncate text-left text-sm font-medium">{item.contact.value.name}</button>
-                      <button onClick={() => markTodayDone(item.contact.id)} className="btn-press min-h-[32px] shrink-0 rounded-full px-3 text-xs font-medium text-white" style={{ background: "var(--brand)" }}>Mark done</button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
           {!isDesktop && (
             <div className="mt-6 px-0">
@@ -1658,7 +1529,7 @@ export default function App() {
           <div className="mt-6 flex flex-col gap-3 px-0 lg:flex-row lg:items-center">
             <div className="relative flex-1">
               <Search size={17} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: "var(--muted)" }} />
-              <input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, notes, or link…" aria-label="Search contacts" className="h-[48px] w-full rounded-[12px] border pl-10 pr-10 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
+              <input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, channel, contact, or link…" aria-label="Search contacts" className="h-[48px] w-full rounded-[12px] border pl-10 pr-10 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
               {search && <button onClick={() => setSearch("")} aria-label="Clear search" className="absolute right-2 top-1/2 flex h-[32px] w-[32px] -translate-y-1/2 items-center justify-center rounded-full"><X size={16} /></button>}
             </div>
             <div className="flex gap-1 overflow-x-auto no-scrollbar" role="tablist" aria-label="Filter contacts">
@@ -1895,7 +1766,7 @@ export default function App() {
                       <p className="text-[15px] font-semibold">{profileDraft.name || "You"}</p>
                       {profileDraft.whatIDo && <p className="mt-1 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>{profileDraft.whatIDo}</p>}
                       {profileDraft.openFor && <p className="mt-1 text-xs font-medium" style={{ color: "var(--brand)" }}>Open for: {profileDraft.openFor}</p>}
-                      {profileDraft.featuredLink && <a href={safeHref(profileDraft.featuredLink) || "#"} target="_blank" rel="noopener noreferrer" className="mt-2 block truncate text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>{profileDraft.featuredLink}</a>}
+                      {profileDraft.featuredLink && <a href={profileDraft.featuredLink} target="_blank" rel="noopener noreferrer" className="mt-2 block truncate text-xs font-medium underline underline-offset-4" style={{ color: "var(--brand)" }}>{profileDraft.featuredLink}</a>}
                     </div>
                   )}
                   <p className="mt-3 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>This is the card that travels with your pitches. Keep it honest and specific — one line about what you do beats a list.</p>
@@ -2022,9 +1893,9 @@ export default function App() {
                 <div><label htmlFor="f-worktype" className="small-caps block" style={{ color: "var(--muted)" }}>Work type</label><select id="f-worktype" value={form.workType} onChange={e => setForm({ ...form, workType: e.target.value as WorkType })} className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }}>{WORK_TYPES.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}</select></div>
                 <div><label htmlFor="f-followup" className="small-caps block" style={{ color: "var(--muted)" }}>Follow-up date</label><input id="f-followup" type="date" value={form.followUpDate} onChange={e => setForm({ ...form, followUpDate: e.target.value })} className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
               </div>
-              <div><label htmlFor="f-why" className="small-caps block" style={{ color: "var(--muted)" }}>What caught your eye?</label><textarea id="f-why" value={form.whyThem} onChange={e => setForm({ ...form, whyThem: e.target.value })} rows={2} placeholder="Loved their recent branding — the way they handled type stayed with me…" className="mt-2 w-full resize-y rounded-[12px] border px-3.5 py-3 text-[15px] leading-relaxed" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+              <div><label htmlFor="f-why" className="small-caps block" style={{ color: "var(--muted)" }}>Why them — what work did you love?</label><textarea id="f-why" value={form.whyThem} onChange={e => setForm({ ...form, whyThem: e.target.value })} rows={2} placeholder="Loved their recent branding — the way they handled type stayed with me…" className="mt-2 w-full resize-y rounded-[12px] border px-3.5 py-3 text-[15px] leading-relaxed" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
               <div className="grid gap-4 sm:grid-cols-2">
-                <div><label htmlFor="f-sent" className="small-caps block" style={{ color: "var(--muted)" }}>Pitch you sent</label><input id="f-sent" value={form.whatSent} onChange={e => setForm({ ...form, whatSent: e.target.value })} placeholder="Intro + 2 branding pieces" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
+                <div><label htmlFor="f-sent" className="small-caps block" style={{ color: "var(--muted)" }}>What I sent</label><input id="f-sent" value={form.whatSent} onChange={e => setForm({ ...form, whatSent: e.target.value })} placeholder="Intro + 2 branding pieces" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
                 <div><label htmlFor="f-next" className="small-caps block" style={{ color: "var(--muted)" }}>Next step</label><input id="f-next" value={form.nextStep} onChange={e => setForm({ ...form, nextStep: e.target.value })} placeholder="Follow up in 4 days with idea" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /></div>
               </div>
               <div><label htmlFor="f-featured" className="small-caps block" style={{ color: "var(--muted)" }}>Featured work for them</label><input id="f-featured" value={form.featuredLink} onChange={e => setForm({ ...form, featuredLink: e.target.value })} placeholder="https://your-portfolio.com/work" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} /><p className="mt-2 text-xs leading-relaxed" style={{ color: "var(--muted)" }}>This piece travels with your pitch. Leave it as your profile featured work, or pick a piece that fits them.</p></div>
@@ -2044,34 +1915,13 @@ export default function App() {
           <button aria-label="Close delete dialog" onClick={() => setDeleteTarget(null)} className="absolute inset-0 bg-black/35" />
           <div className="relative w-full max-w-[460px] rounded-t-[16px] p-6 sm:rounded-[16px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
             <div className="flex h-[44px] w-[44px] items-center justify-center rounded-full" style={{ background: "var(--tint)" }}><Trash2 size={19} style={{ color: "#DB200D" }} /></div>
-            <h2 className="mt-4 text-[22px] font-semibold">Archive {deleteTarget.value.name}? You can undo for 5 seconds.</h2>
-            <p className="mt-2 leading-relaxed" style={{ color: "var(--muted)" }}>This archives the contact. Tap Undo in the bar below within 5 seconds to bring it back. Purged after 30 days in Settings &gt; Account.</p>
+            <h2 className="mt-4 text-[22px] font-semibold">Delete {deleteTarget.value.name}?</h2>
+            <p className="mt-2 leading-relaxed" style={{ color: "var(--muted)" }}>This will permanently remove this contact and its notes.</p>
             <div className="mt-6 flex gap-2"><button onClick={() => setDeleteTarget(null)} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Cancel</button><button onClick={confirmDelete} disabled={busy} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white disabled:opacity-50" style={{ background: "#DB200D" }}>{busy ? "Deleting…" : "Delete"}</button></div>
           </div>
         </div>
       )}
 
-      {pendingDelete && (
-        <div role="status" className="toast-in fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-full px-4 py-3 text-sm font-medium text-white shadow-lg" style={{ background: "#0D0D0C" }}>
-          <span>Archived {pendingDelete.contact.value.name}.</span>
-          <button onClick={undoDelete} className="min-h-[32px] rounded-full bg-white px-3 text-xs font-semibold text-black">Undo</button>
-        </div>
-      )}
-      {winModal && winContact && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label="Save win">
-          <button aria-label="Close win dialog" onClick={() => { setWinModal(false); setWinContact(null); }} className="absolute inset-0 bg-black/35" />
-          <div className="relative w-full max-w-[520px] rounded-t-[16px] p-6 sm:rounded-[16px]" style={{ background: "var(--surface)", boxShadow: "var(--shadow)" }}>
-            <h2 className="text-[22px] font-semibold">Win: {winContact.value.name}</h2>
-            <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>What worked? Who else should you reach? This builds your Proof Stack.</p>
-            <label className="small-caps mt-5 block" style={{ color: "var(--muted)" }}>What worked?</label>
-            <textarea value={winNote} onChange={e => setWinNote(e.target.value)} rows={3} placeholder="They loved the editorial direction. Quick yes after 2nd follow-up." className="mt-2 w-full rounded-[12px] border px-3.5 py-3 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-            <label className="small-caps mt-4 block" style={{ color: "var(--muted)" }}>Who else should I reach? (handle or name)</label>
-            <input value={winReferral} onChange={e => setWinReferral(e.target.value)} placeholder="@studio or Studio Name" className="mt-2 h-[48px] w-full rounded-[12px] border px-3.5 text-[15px]" style={{ borderColor: "var(--divider)", background: "var(--input)" }} />
-            <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>Referral will be added to To-Reach as Via {winContact.value.name}.</p>
-            <div className="mt-6 flex gap-2"><button onClick={() => { setWinModal(false); setWinContact(null); }} className="min-h-[46px] flex-1 rounded-[12px] border text-sm font-medium" style={{ borderColor: "var(--divider)" }}>Skip</button><button onClick={saveWinLoop} className="min-h-[46px] flex-1 rounded-[12px] text-sm font-medium text-white" style={{ background: "var(--brand)" }}>Save win</button></div>
-          </div>
-        </div>
-      )}
       {toast && <div role="status" className="toast-in fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full px-4 py-3 text-sm font-medium text-white shadow-lg" style={{ background: "#0D0D0C" }}><Check size={16} /> {toast}</div>}
     </div>
   );
